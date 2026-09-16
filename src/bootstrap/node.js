@@ -4,7 +4,7 @@ process.on('unhandledRejection', (e) => { console.error('UNHANDLED REJECTION:', 
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
-const { loadConfig, saveConfig, log, setLogLevel } = require('../../config/config');
+const { loadConfig, saveConfig, log, setLogLevel } = require('../../config');
 const { initDB } = require('../Blockchain/db');
 const { Chain } = require('../Blockchain/chain');
 const { ChallengeManager } = require('../Blockchain/challenge');
@@ -57,7 +57,7 @@ class ChocoNode {
       log('info', `Admin token: ${cfg.adminToken}`);
     }
 
-    this._configPath = require('../../config/config').CONFIG_PATH;
+    this._configPath = require('../../config').CONFIG_PATH;
 
     this._printBanner();
 
