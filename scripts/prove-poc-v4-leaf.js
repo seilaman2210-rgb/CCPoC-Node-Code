@@ -4,7 +4,6 @@ const fs = require('fs');
 const path = require('path');
 const {
   verifyMerkleProofBuf,
-  deriveSampleIndexes,
   computeDeadline,
   sha256hex,
   proofMessage,
@@ -88,7 +87,7 @@ function main() {
           readExactSync(plotFd, sibling, siblingIndex * SCOOP_SIZE);
         } else {
           const treeLevel = metadata.merkle_index_levels[layer - 1];
-          if (!treeLevel || Number(treeLevel.count) !== Math.ceil(count / 2)) {
+          if (!treeLevel || Number(treeLevel.count) !== count) {
             throw new Error('Merkle index metadata has inconsistent level counts');
           }
           readExactSync(treeFd, sibling, Number(treeLevel.offset_bytes) + siblingIndex * SCOOP_SIZE);
