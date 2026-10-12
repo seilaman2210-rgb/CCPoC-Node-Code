@@ -92,6 +92,27 @@ function initDB(dbPath, cfg) {
       PRIMARY KEY(plot_id, miner)
     );
 
+    -- Consensus-validated, immutable plot registrations. This table is a
+    -- materialized event index; only entries whose block is on the queried
+    -- parent ancestry are considered committed by consensus.
+    CREATE TABLE IF NOT EXISTS plot_commitment_events (
+      block_hash TEXT NOT NULL,
+      block_height INTEGER NOT NULL,
+      tx_index INTEGER NOT NULL,
+      plot_id TEXT NOT NULL,
+      miner TEXT NOT NULL,
+      merkle_root TEXT NOT NULL,
+      capacity_bytes TEXT NOT NULL,
+      size_gb INTEGER NOT NULL,
+      total_scoops INTEGER NOT NULL,
+      format_version INTEGER NOT NULL,
+      PRIMARY KEY(block_hash, tx_index)
+    );
+    CREATE INDEX IF NOT EXISTS idx_plot_commitment_events_id_height
+      ON plot_commitment_events(plot_id, block_height DESC, tx_index DESC);
+    CREATE INDEX IF NOT EXISTS idx_plot_commitment_events_miner_height
+      ON plot_commitment_events(miner, block_height DESC);
+
     CREATE TABLE IF NOT EXISTS peer_plot_commitments (
       plot_id TEXT, miner TEXT, size_gb REAL, node_url TEXT,
       created_at INTEGER, total_scoops INTEGER DEFAULT 0, PRIMARY KEY(plot_id, miner, node_url)
