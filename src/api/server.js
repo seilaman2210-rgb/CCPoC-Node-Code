@@ -1,8 +1,7 @@
 const path = require('path');
 const { safeInt, safeBigInt, hashTransaction, pubkeyToAddress, calculateMiningReward, verifySignature, plotRegisterMessage, evmTxHash, recoverTransactionSender, vrfProve, vrfVerify } = require('../crypto-utils/crypto');
 const { log, getLogBuffer } = require('../../config/config');
-const MAX_PLOT_GB = require('../crypto-utils/plot-capacity').MAX_PLOT_GB;
-const { makeLocalAnnouncement, verifyAnnouncement } = require('../crypto-utils/plot-capacity');
+const { MAX_PLOT_GB, makeLocalAnnouncement, verifyAnnouncement, validatePlotCapacity, isMerkleRoot } = require('../crypto-utils/plot-capacity');
 const { estimateIntrinsicGas, minimumFee } = require('../consensus/gas');
 
 const CC_SCALE = 10n ** 18n;
@@ -494,6 +493,16 @@ app.get('/api/state', (req, res) => {
       const parsedSize = parseFloat(String(size_gb));
       if (!Number.isFinite(parsedSize) || parsedSize <= 0 || parsedSize > MAX_PLOT_GB) {
         return res.status(400).json({ error: `invalid size_gb (1-${MAX_PLOT_GB} GB)` });
+      }
+      if (!isMerkleRoot(String(merkle_root))) {
+        return res.status(400).json({ error: 'merkle_root must be exactly 32 bytes of hex' });
+      }
+      const capacityCheck = validatePlotCapacity(parsedSize, total_scoops);
+      if (!capacityCheck.ok) {
+        return res.status(400).json({ error: capacityCheck.motivo });
+      }
+      if (String(parsedSize) !== String(size_gb)) {
+        return res.status(400).json({ error: 'size_gb must use canonical numeric notation' });
       }
       try {
         if (pubkeyToAddress(public_key).toLowerCase() !== normalizedAddress) {
