@@ -5,6 +5,8 @@ const { validatePlotCapacity } = require('../crypto-utils/plot-capacity');
 const {
   deriveTargetScoopIndex,
   deriveCanonicalPlotLeaf,
+  derivePlotCapacitySampleIndexes,
+  CAPACITY_SAMPLE_COUNT,
 } = require('../consensus/poc-plot-v4');
 
 
@@ -140,6 +142,44 @@ class ChallengeManager {
     const merkleProof = proofPacket.merkle_proof || [];
     if (!verifyMerkleProofBuf(leafHash, scoopIndex, totalScoops, merkleProof, committedRoot)) return { ok: false, motivo: 'Merkle proof does not match on-chain plot root' };
 
+    let expectedCapacitySamples;
+    try {
+      expectedCapacitySamples = derivePlotCapacitySampleIndexes(challengeId, totalScoops, String(plotId), scoopIndex);
+    } catch (e) {
+      return { ok: false, motivo: 'cannot derive canonical capacity sample set: ' + e.message };
+    }
+    if (!Array.isArray(proofPacket.capacity_samples) || proofPacket.capacity_samples.length !== CAPACITY_SAMPLE_COUNT) {
+      return { ok: false, motivo: 'capacity_samples must include exactly ' + CAPACITY_SAMPLE_COUNT + ' spot checks' };
+    }
+    for (let samplePos = 0; samplePos < expectedCapacitySamples.length; samplePos++) {
+      const sample = proofPacket.capacity_samples[samplePos];
+      const expectedIndex = expectedCapacitySamples[samplePos];
+      if (!sample || safeInt(sample.scoop_index, -1) !== expectedIndex) {
+        return { ok: false, motivo: 'capacity sample ' + samplePos + ' has a non-canonical index' };
+      }
+      if (typeof sample.scoop_data !== 'string' || !/^[0-9a-fA-F]{64}$/.test(sample.scoop_data)) {
+        return { ok: false, motivo: 'capacity sample ' + samplePos + ' must include exactly 32 bytes of scoop_data' };
+      }
+      const sampleLeaf = Buffer.from(sample.scoop_data, 'hex');
+      let expectedLeaf;
+      try {
+        expectedLeaf = deriveCanonicalPlotLeaf({
+          chain_id: String(chain.cfg.chainId == null ? '0' : chain.cfg.chainId),
+          miner: String(miner).toLowerCase(),
+          plot_id: String(plotId),
+          nonce_index: Math.floor(expectedIndex / MINING_SCOOP_MODULUS),
+          scoop_index: expectedIndex % MINING_SCOOP_MODULUS,
+        });
+      } catch (e) {
+        return { ok: false, motivo: 'capacity sample ' + samplePos + ' coordinates are invalid: ' + e.message };
+      }
+      if (!expectedLeaf.equals(sampleLeaf)) return { ok: false, motivo: 'capacity sample ' + samplePos + ' is not canonical for this plot' };
+      if (!Array.isArray(sample.merkle_proof)
+          || !verifyMerkleProofBuf(sampleLeaf, expectedIndex, totalScoops, sample.merkle_proof, committedRoot)) {
+        return { ok: false, motivo: 'capacity sample ' + samplePos + ' Merkle proof does not match on-chain root' };
+      }
+    }
+
     const proofSig = (proofPacket && proofPacket.proof_signature) || '';
     if (!proofSig) return { ok: false, motivo: 'proof_signature required' };
     const pkRow = this.db.prepare('SELECT public_key_secp256k1 FROM user_keys WHERE lower(address) = lower(?)').get(miner)
@@ -158,10 +198,10 @@ class ChallengeManager {
       return { ok: false, motivo: 'proof signature does not match miner address' };
     }
 
-    const insertRes = this.db.prepare('INSERT OR IGNORE INTO challenge_submissions (challenge_id, miner, plot_id, size_gb, deadline, proof_digest, proof_signature, submitted_at, public_key) VALUES (?,?,?,?,?,?,?,?,?)').run(challengeId, miner, plotId, sizeGb, deadline, expectedDigest, proofSig, now, proofPublicKey);
+    const insertRes = this.db.prepare('INSERT OR IGNORE INTO challenge_submissions (challenge_id, miner, plot_id, size_gb, deadline, proof_digest, proof_signature, submitted_at, public_key, capacity_samples) VALUES (?,?,?,?,?,?,?,?,?,?)').run(challengeId, miner, plotId, sizeGb, deadline, expectedDigest, proofSig, now, proofPublicKey, JSON.stringify(proofPacket.capacity_samples));
     if (insertRes.changes > 0 && /^[0-9a-fA-F]{64}$/.test(proofPacket.scoop_data)) {
-      this.db.prepare('UPDATE challenge_submissions SET scoop_data = ?, scoop_index = ?, total_scoops = ?, merkle_proof = ?, merkle_root = ? WHERE challenge_id = ? AND miner = ? AND plot_id = ? AND deadline = ?')
-        .run(String(proofPacket.scoop_data), safeInt(proofPacket.scoop_index, 0), totalScoops, JSON.stringify(merkleProof || []), String(committedRoot || ''), challengeId, miner, plotId, deadline);
+      this.db.prepare('UPDATE challenge_submissions SET scoop_data = ?, scoop_index = ?, total_scoops = ?, merkle_proof = ?, merkle_root = ?, capacity_samples = ? WHERE challenge_id = ? AND miner = ? AND plot_id = ? AND deadline = ?')
+        .run(String(proofPacket.scoop_data), safeInt(proofPacket.scoop_index, 0), totalScoops, JSON.stringify(merkleProof || []), String(committedRoot || ''), JSON.stringify(proofPacket.capacity_samples), challengeId, miner, plotId, deadline);
     }
     const updated = this.db.prepare('UPDATE mining_challenges SET winner_miner = ?, winner_deadline = ?, winner_plot_id = ?, finalized_at = ? WHERE challenge_id = ? AND (winner_deadline IS NULL OR ? < winner_deadline)').run(miner, deadline, plotId, now, challengeId, deadline);
     const subCount = this.db.prepare('SELECT COUNT(*) as cnt FROM challenge_submissions WHERE challenge_id = ?').get(challengeId).cnt;
@@ -403,9 +443,12 @@ class ChallengeManager {
     }
     const winnerPkRow = this.db.prepare('SELECT public_key_secp256k1 FROM user_keys WHERE lower(address) = lower(?)').get(winner.miner)
       || this.db.prepare('SELECT public_key_secp256k1 FROM users WHERE lower(address) = lower(?)').get(winner.miner);
+    let winnerCapacitySamples = [];
+    try { winnerCapacitySamples = JSON.parse(winner.capacity_samples || '[]'); } catch {}
     const winnerProof = {
       miner: (winner.miner || '').toLowerCase(),
       public_key: winner.public_key || ((winnerPkRow && winnerPkRow.public_key_secp256k1) || ''),
+      capacity_samples: winnerCapacitySamples,
       deadline: winner.deadline,
       plot_id: winner.plot_id || '',
       proof_signature: winner.proof_signature || '',
