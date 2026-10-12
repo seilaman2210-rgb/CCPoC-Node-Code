@@ -1,7 +1,15 @@
-const { vrfProve, vrfVerify, plotRegisterMessage, signMessage, verifySignature, pubkeyToAddress, safeInt } = require('./crypto');
+const { vrfProve, vrfVerify, plotRegisterMessage, signMessage, verifySignature, pubkeyToAddress, safeInt, plotScoopCount } = require('./crypto');
+const { validatePlotMetadata } = require('../consensus/plot-capacity-validation');
 const isMerkleRoot = (v) => typeof v === 'string' && /^[0-9a-fA-F]{64}$/.test(v);
 
 const MAX_PLOT_GB = 10240;
+
+function validatePlotCapacity(sizeGb, totalScoops) {
+  const size = typeof sizeGb === 'number' ? sizeGb
+    : (typeof sizeGb === 'string' && sizeGb.trim() !== '' ? Number(sizeGb) : NaN);
+  const expectedScoops = plotScoopCount(size);
+  return validatePlotMetadata(size, totalScoops, expectedScoops, MAX_PLOT_GB);
+}
 
 function makeLocalAnnouncement(plot, cfg, vrfOverrides = null) {
   const miner = String(plot.miner || '').toLowerCase();
@@ -63,8 +71,9 @@ function verifyAnnouncement(ann, opts = {}) {
   const miner = String(ann.miner).toLowerCase();
   const publicKey = String(ann.public_key || '');
   const merkleRoot = String(ann.merkle_root);
-  const sizeGb = parseFloat(ann.size_gb);
-  if (!Number.isFinite(sizeGb) || sizeGb <= 0) return { ok: false, motivo: 'invalid size_gb' };
+  const capacity = validatePlotCapacity(ann.size_gb, ann.total_scoops);
+  if (!capacity.ok) return capacity;
+  const sizeGb = capacity.sizeGb;
 
   if (requireSig) {
     if (!publicKey) return { ok: false, motivo: 'public_key required for signature check' };
@@ -85,4 +94,4 @@ function verifyAnnouncement(ann, opts = {}) {
   return { ok: true };
 }
 
-module.exports = { makeLocalAnnouncement, verifyAnnouncement, isMerkleRoot, MAX_PLOT_GB };
+module.exports = { makeLocalAnnouncement, verifyAnnouncement, validatePlotCapacity, isMerkleRoot, MAX_PLOT_GB };
