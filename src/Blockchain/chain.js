@@ -8,6 +8,15 @@ const { estimateIntrinsicGas, nextBaseFee, GAS_PARAMS, capTxGasLimit, minimumFee
 const { validatePlotCapacity } = require('../crypto-utils/plot-capacity');
 const { calculateEmissionThroughHeight } = require('../consensus/issuance');
 const { isWithinRatio } = require('../consensus/base-target-validation');
+const {
+  PLOT_FORMAT_VERSION,
+  SCOOPS_PER_NONCE: V4_SCOOPS_PER_NONCE,
+  ZERO_ADDRESS: PLOT_COMMITMENT_RECIPIENT,
+  parsePlotCommitmentTxData,
+  isPlotCommitmentTxData,
+  deriveCanonicalPlotLeaf,
+  deriveTargetScoopIndex,
+} = require('../consensus/poc-plot-v4');
 const { log } = require('../../config/config');
 const { createBlock } = require('@ethereumjs/block');
 const { bytesToHex } = require('@ethereumjs/util');
