@@ -103,7 +103,7 @@ function initDB(dbPath, cfg) {
       miner TEXT NOT NULL,
       merkle_root TEXT NOT NULL,
       capacity_bytes TEXT NOT NULL,
-      size_gb INTEGER NOT NULL,
+      size_gb REAL NOT NULL,
       total_scoops INTEGER NOT NULL,
       format_version INTEGER NOT NULL,
       PRIMARY KEY(block_hash, tx_index)
