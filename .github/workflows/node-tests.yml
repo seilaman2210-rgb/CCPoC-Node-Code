@@ -26,6 +26,23 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Report dependency security advisories
+        shell: bash
+        run: |
+          npm audit --json > npm-audit.json || true
+          node -e "
+            const audit = JSON.parse(require('fs').readFileSync('npm-audit.json', 'utf8'));
+            console.log('Dependency audit totals:', JSON.stringify(audit.metadata?.vulnerabilities || {}));
+            for (const [name, item] of Object.entries(audit.vulnerabilities || {})) {
+              const advisories = (item.via || []).map(v => typeof v === 'string' ? v : {
+                title: v.title, range: v.range, url: v.url
+              });
+              console.log(JSON.stringify({
+                package: name, severity: item.severity, direct: item.isDirect,
+                range: item.range, fixAvailable: item.fixAvailable, advisories
+              }));
+            }
+          "
       - name: Check JavaScript syntax
         shell: bash
         run: |
