@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { ZERO_HASH, sha256hex, sha256buf, safeInt, safeBigInt, hashBlock, hashTransaction, merkleRoot, computeStateRootAfterTxs, calculateMiningReward, verifyMerkleProofBuf, computeDeadline, plotScoopCount, SCOOPS_PER_NONCE, MINING_SCOOP_MODULUS, verifySignature, canonicalTxMessage, proofMessage, recoverTransactionSender } = require('../crypto-utils/crypto');
+const { ZERO_HASH, sha256hex, sha256buf, safeInt, safeBigInt, hashBlock, hashTransaction, merkleRoot, computeStateRootAfterTxs, calculateMiningReward, verifyMerkleProofBuf, computeDeadline, plotScoopCount, SCOOPS_PER_NONCE, MINING_SCOOP_MODULUS, verifySignature, canonicalTxMessage, proofMessage, recoverTransactionSender, pubkeyToAddress } = require('../crypto-utils/crypto');
 const { log } = require('../../config/config');
 const { validatePlotCapacity } = require('../crypto-utils/plot-capacity');
 const {
@@ -144,13 +144,21 @@ class ChallengeManager {
     if (!proofSig) return { ok: false, motivo: 'proof_signature required' };
     const pkRow = this.db.prepare('SELECT public_key_secp256k1 FROM user_keys WHERE lower(address) = lower(?)').get(miner)
       || this.db.prepare('SELECT public_key_secp256k1 FROM users WHERE lower(address) = lower(?)').get(miner);
-    if (!pkRow || !pkRow.public_key_secp256k1) return { ok: false, motivo: 'miner has no registered public key' };
+    const proofPublicKey = String((proofPacket && proofPacket.public_key) || (pkRow && pkRow.public_key_secp256k1) || '');
+    if (!proofPublicKey) return { ok: false, motivo: 'winner proof must include the miner public key' };
+    try {
+      if (pubkeyToAddress(proofPublicKey).toLowerCase() !== String(miner).toLowerCase()) {
+        return { ok: false, motivo: 'proof public key does not match miner address' };
+      }
+    } catch {
+      return { ok: false, motivo: 'invalid proof public key' };
+    }
     const msg = proofMessage(challengeId, miner, deadline, plotId);
-    if (!verifySignature(msg, proofSig, pkRow.public_key_secp256k1)) {
+    if (!verifySignature(msg, proofSig, proofPublicKey)) {
       return { ok: false, motivo: 'proof signature does not match miner address' };
     }
 
-    const insertRes = this.db.prepare('INSERT OR IGNORE INTO challenge_submissions (challenge_id, miner, plot_id, size_gb, deadline, proof_digest, proof_signature, submitted_at) VALUES (?,?,?,?,?,?,?,?)').run(challengeId, miner, plotId, sizeGb, deadline, expectedDigest, proofSig, now);
+    const insertRes = this.db.prepare('INSERT OR IGNORE INTO challenge_submissions (challenge_id, miner, plot_id, size_gb, deadline, proof_digest, proof_signature, submitted_at, public_key) VALUES (?,?,?,?,?,?,?,?,?)').run(challengeId, miner, plotId, sizeGb, deadline, expectedDigest, proofSig, now, proofPublicKey);
     if (insertRes.changes > 0 && /^[0-9a-fA-F]{64}$/.test(proofPacket.scoop_data)) {
       this.db.prepare('UPDATE challenge_submissions SET scoop_data = ?, scoop_index = ?, total_scoops = ?, merkle_proof = ?, merkle_root = ? WHERE challenge_id = ? AND miner = ? AND plot_id = ? AND deadline = ?')
         .run(String(proofPacket.scoop_data), safeInt(proofPacket.scoop_index, 0), totalScoops, JSON.stringify(merkleProof || []), String(committedRoot || ''), challengeId, miner, plotId, deadline);
@@ -397,7 +405,7 @@ class ChallengeManager {
       || this.db.prepare('SELECT public_key_secp256k1 FROM users WHERE lower(address) = lower(?)').get(winner.miner);
     const winnerProof = {
       miner: (winner.miner || '').toLowerCase(),
-      public_key: (winnerPkRow && winnerPkRow.public_key_secp256k1) || '',
+      public_key: winner.public_key || ((winnerPkRow && winnerPkRow.public_key_secp256k1) || ''),
       deadline: winner.deadline,
       plot_id: winner.plot_id || '',
       proof_signature: winner.proof_signature || '',
