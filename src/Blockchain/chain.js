@@ -16,6 +16,8 @@ const {
   isPlotCommitmentTxData,
   deriveCanonicalPlotLeaf,
   deriveTargetScoopIndex,
+  derivePlotCapacitySampleIndexes,
+  CAPACITY_SAMPLE_COUNT,
 } = require('../consensus/poc-plot-v4');
 const { log } = require('../../config/config');
 const { createBlock } = require('@ethereumjs/block');
@@ -602,6 +604,56 @@ class Chain {
         if (!verifyMerkleProofBuf(leafHash, scoopIndex, totalScoops, merkleProof, merkleRootClaim)) {
           return { ok: false, motivo: 'winner_proof merkle proof does not match committed plot root' };
         }
+
+        // A single Merkle inclusion proof is not enough: a malicious miner
+        // could build a tree with only one valid scoop slot per nonce. Verify
+        // deterministic challenge-derived spot checks against canonical data.
+        let expectedCapacitySamples;
+        try {
+          expectedCapacitySamples = derivePlotCapacitySampleIndexes(
+            String(bloco.challenge_id),
+            totalScoops,
+            wpPlotId,
+            scoopIndex
+          );
+        } catch (e) {
+          return { ok: false, motivo: 'cannot derive canonical capacity sample set: ' + e.message };
+        }
+        const capacitySamples = wp.capacity_samples;
+        if (!Array.isArray(capacitySamples) || capacitySamples.length !== CAPACITY_SAMPLE_COUNT) {
+          return { ok: false, motivo: `winner_proof must include exactly ${CAPACITY_SAMPLE_COUNT} capacity samples` };
+        }
+        for (let samplePos = 0; samplePos < expectedCapacitySamples.length; samplePos++) {
+          const sample = capacitySamples[samplePos];
+          const expectedIndex = expectedCapacitySamples[samplePos];
+          if (!sample || safeInt(sample.scoop_index, -1) !== expectedIndex) {
+            return { ok: false, motivo: `capacity sample ${samplePos} has a non-canonical index` };
+          }
+          if (typeof sample.scoop_data !== 'string' || !/^[0-9a-fA-F]{64}$/.test(sample.scoop_data)) {
+            return { ok: false, motivo: `capacity sample ${samplePos} must include exactly 32 bytes of scoop_data` };
+          }
+          const sampleLeaf = Buffer.from(sample.scoop_data, 'hex');
+          let canonicalSampleLeaf;
+          try {
+            canonicalSampleLeaf = deriveCanonicalPlotLeaf({
+              chain_id: String(this.cfg.chainId == null ? '0' : this.cfg.chainId),
+              miner: wpMiner,
+              plot_id: wpPlotId,
+              nonce_index: Math.floor(expectedIndex / V4_SCOOPS_PER_NONCE),
+              scoop_index: expectedIndex % V4_SCOOPS_PER_NONCE,
+            });
+          } catch (e) {
+            return { ok: false, motivo: `capacity sample ${samplePos} coordinates are invalid: ${e.message}` };
+          }
+          if (!canonicalSampleLeaf.equals(sampleLeaf)) {
+            return { ok: false, motivo: `capacity sample ${samplePos} is not canonical for this plot` };
+          }
+          if (!Array.isArray(sample.merkle_proof)
+              || !verifyMerkleProofBuf(sampleLeaf, expectedIndex, totalScoops, sample.merkle_proof, merkleRootClaim)) {
+            return { ok: false, motivo: `capacity sample ${samplePos} Merkle proof does not match the on-chain root` };
+          }
+        }
+
         const genSig = String(wp.challenge_seed || '');
         if (!genSig) {
           return { ok: false, motivo: 'winner_proof missing challenge_seed' };
