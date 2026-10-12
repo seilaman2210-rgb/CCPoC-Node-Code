@@ -10,6 +10,7 @@ No full node integration test, multi-node test, live-chain replay, dependency in
 
 - Replace truncating BigInt division in base-target drift checks with exact multiplicative comparisons.
 - Validate plot size and total-scoop metadata consistently in plot announcements, registration, proof submission, and block winner proofs.
+- Align the mining target modulus with the declared 8,192 32-byte leaves per nonce to avoid two eligible leaf slots per nonce in the CCPoC layout.
 - Make Merkle proof verification reject invalid indices, malformed 32-byte hashes, missing siblings, extra siblings, and non-canonical path lengths.
 - Compute cumulative scheduled issuance with BigInt arithmetic, and normalize the default maximum supply to an exact decimal string.
 - Derive selected non-hashed block metadata locally rather than trusting peer-provided values for them.
@@ -18,12 +19,13 @@ No full node integration test, multi-node test, live-chain replay, dependency in
 
 ## Validation completed
 
-A GitHub Actions run on this branch successfully installed the locked dependencies, ran `node --check` across the JavaScript files, and ran the actual repository's `npm test` command. The latest completed run reported **17 tests passed and 0 failed**:
+A GitHub Actions run on this branch successfully installed the locked dependencies, ran `node --check` across the JavaScript files, and ran the actual repository's `npm test` command. The latest completed run reported **20 tests passed and 0 failed**:
 - Base-target ratio checks: boundary cases, over-limit ratios in both directions, malformed values.
 - Plot metadata checks: canonical counts, mismatches, invalid sizes, unsafe values, non-canonical encodings.
 - Plot-capacity integration checks against the canonical 1 GiB scoop count.
 - Merkle checks: valid two-leaf proof, missing/extra/malformed siblings, odd-sized tree duplicate-last convention, invalid indices.
 - Emission checks: block-height boundaries, halving schedule, and a deterministic grid comparing cumulative emission against the per-height reward function.
+- PoC layout checks: 32-byte leaf size, 8,192 entries per nonce, 1 GiB capacity arithmetic, and one eligible slot per complete nonce.
 
 This is meaningful unit/syntax validation, but it is **not** an integration test of a running node, multi-node consensus test, replay of a real database, or formal cryptographic audit.
 
