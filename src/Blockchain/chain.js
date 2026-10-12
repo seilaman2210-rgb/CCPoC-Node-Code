@@ -49,7 +49,7 @@ class Chain {
     try { this.db.prepare('ALTER TABLE blocks ADD COLUMN body_pruned INTEGER DEFAULT 0').run(); } catch (e) { /* already exists */ }
     try { this.db.prepare('ALTER TABLE transactions ADD COLUMN data TEXT DEFAULT ""').run(); } catch (e) { /* already exists */ }
     this.stateTrie = new IncrementalStateRoot();
-    this.diffManager = new Diff_Manager(db, cfg);
+    this.diffManager = new Diff_Manager(db, cfg, this);
     this._loadTip();
     if (!this.getBlock(0)) this._initGenesis();
     this.stateTrieLoadPromise = this.stateTrie.loadFromDB(this.db).catch(e => log('warn', `State trie init: ${e.message}`));
@@ -587,7 +587,7 @@ class Chain {
         let canonicalLeaf;
         try {
           canonicalLeaf = deriveCanonicalPlotLeaf({
-            chain_id: String(bloco.chain_id || this.cfg.chainId || '0'),
+            chain_id: String(this.cfg.chainId == null ? '0' : this.cfg.chainId),
             miner: wpMiner,
             plot_id: wpPlotId,
             nonce_index: Math.floor(scoopIndex / V4_SCOOPS_PER_NONCE),
