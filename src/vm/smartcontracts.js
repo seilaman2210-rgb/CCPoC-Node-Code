@@ -244,13 +244,20 @@ async function runWithStorage(vm, contractAddress, params, persist = false) {
   const stateManager = vm.stateManager;
   const canCheckpoint = stateManager && typeof stateManager.checkpoint === 'function' && typeof stateManager.revert === 'function';
   if (canCheckpoint) await stateManager.checkpoint();
-  await loadAllContractState(vm);
-  if (params.caller && db) {
-    const callerAddress = fromEvmAddress(params.caller).toLowerCase();
-    const user = db.prepare('SELECT balance FROM users WHERE lower(address) = lower(?)').get(callerAddress);
-    const callerAccount = (await stateManager.getAccount(params.caller)) || new Account();
-    callerAccount.balance = BigInt(user ? user.balance : 0);
-    await stateManager.putAccount(params.caller, callerAccount);
+  try {
+    await loadAllContractState(vm);
+    if (params.caller && db) {
+      const callerAddress = fromEvmAddress(params.caller).toLowerCase();
+      const user = db.prepare('SELECT balance FROM users WHERE lower(address) = lower(?)').get(callerAddress);
+      const callerAccount = (await stateManager.getAccount(params.caller)) || new Account();
+      callerAccount.balance = BigInt(user ? user.balance : 0);
+      await stateManager.putAccount(params.caller, callerAccount);
+    }
+  } catch (err) {
+    if (canCheckpoint) {
+      try { await stateManager.revert(); } catch {}
+    }
+    throw err;
   }
   const writtenBy = new Map();
   const evmThis = toEvmAddress(contractAddress);
