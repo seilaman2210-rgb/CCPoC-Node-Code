@@ -1,0 +1,61 @@
+name: Dependency remediation preview
+
+on:
+  push:
+    branches:
+      - review/deeper-consensus-hardening
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install current lockfile
+        run: npm ci
+      - name: Remove unused vulnerable localtunnel dependency
+        run: npm uninstall localtunnel
+      - name: Apply compatible npm security updates
+        shell: bash
+        run: |
+          npm audit fix || true
+          npm audit --json > npm-audit-after.json || true
+          node -e "
+            const pkg = require('./package.json');
+            const lock = require('./package-lock.json');
+            const audit = JSON.parse(require('fs').readFileSync('npm-audit-after.json', 'utf8'));
+            const names = ['axios', 'localtunnel', 'proxy-addr', 'qs', 'tmp', 'solc'];
+            for (const name of names) {
+              const item = lock.packages['node_modules/' + name];
+              console.log(JSON.stringify({ name, rootDependency: pkg.dependencies?.[name] || null, lockedVersion: item?.version || null }));
+            }
+            console.log('Audit after remediation preview:', JSON.stringify(audit.metadata?.vulnerabilities || {}));
+            for (const [name, item] of Object.entries(audit.vulnerabilities || {})) {
+              console.log(JSON.stringify({ package: name, severity: item.severity, range: item.range, fixAvailable: item.fixAvailable }));
+            }
+          "
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find . -path './node_modules' -prune -o -name '*.js' -type f -print0)
+      - name: Run unit tests
+        run: npm test
+      - name: Upload patched manifests for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-remediation-preview
+          path: |
+            package.json
+            package-lock.json
+            npm-audit-after.json
+          if-no-files-found: error
