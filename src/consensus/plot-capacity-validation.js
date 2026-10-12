@@ -4,8 +4,8 @@ const DEFAULT_MAX_PLOT_GB = 10240;
 
 /**
  * Validate a plot's declared capacity against the protocol's canonical
- * number of 32-byte scoop leaves. The expected count is passed by the caller
- * so the calculation remains centralized in crypto.js (plotScoopCount).
+ * number of 32-byte scoop leaves. The expected count is supplied by the
+ * caller, which derives it using crypto.js's plotScoopCount().
  */
 function validatePlotMetadata(sizeGb, totalScoops, expectedTotalScoops, maxPlotGb = DEFAULT_MAX_PLOT_GB) {
   const size = typeof sizeGb === 'number' ? sizeGb
@@ -18,7 +18,7 @@ function validatePlotMetadata(sizeGb, totalScoops, expectedTotalScoops, maxPlotG
   let count;
   if (typeof totalScoops === 'number') {
     count = totalScoops;
-  } else if (typeof totalScoops === 'string' && /^\\d+$/.test(totalScoops)) {
+  } else if (typeof totalScoops === 'string' && /^[0-9]+$/.test(totalScoops)) {
     count = Number(totalScoops);
   } else {
     return { ok: false, motivo: 'total_scoops must be a positive integer' };
