@@ -53,10 +53,9 @@ function _validateCapacityBytes(value) {
     throw new RangeError('capacity_bytes must be between one complete nonce and 10 TiB');
   }
   if (bytes % BigInt(NONCE_BYTES) !== 0n) throw new RangeError('v4 plot capacity must contain complete nonces');
-  if (bytes % BigInt(NONCE_BYTES) !== 0n) throw new RangeError('plot capacity must contain complete nonces');
   const count = bytes / BigInt(SCOOP_SIZE);
   if (count > BigInt(Number.MAX_SAFE_INTEGER)) throw new RangeError('plot has too many leaves');
-  return { capacityBytes: bytes, sizeGb: Number(bytes / GIB), totalScoops: Number(count) };
+  return { capacityBytes: bytes, sizeGb: Number(bytes) / Number(GIB), totalScoops: Number(count) };
 }
 
 function encodePlotCommitmentTxData(input) {
