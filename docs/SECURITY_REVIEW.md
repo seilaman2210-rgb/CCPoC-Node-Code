@@ -18,13 +18,14 @@ No full node integration test, multi-node test, live-chain replay, dependency in
 
 ## Validation completed
 
-The helper logic was copied into an isolated local harness and tested with Node's built-in test runner:
+A GitHub Actions run on this branch successfully installed the locked dependencies, ran `node --check` across the JavaScript files, and ran the actual repository's `npm test` command. The latest completed run reported **17 tests passed and 0 failed**:
 - Base-target ratio checks: boundary cases, over-limit ratios in both directions, malformed values.
 - Plot metadata checks: canonical counts, mismatches, invalid sizes, unsafe values, non-canonical encodings.
+- Plot-capacity integration checks against the canonical 1 GiB scoop count.
 - Merkle checks: valid two-leaf proof, missing/extra/malformed siblings, odd-sized tree duplicate-last convention, invalid indices.
-- Emission checks: block-height boundaries and halving schedule.
+- Emission checks: block-height boundaries, halving schedule, and a deterministic grid comparing cumulative emission against the per-height reward function.
 
-The isolated harness reported 14 passing tests and zero failures. An exhaustive small-range property check of cumulative emission against per-height scheduled rewards also passed. These tests do not run the actual node with its dependencies and must not be described as full repository CI.
+This is meaningful unit/syntax validation, but it is **not** an integration test of a running node, multi-node consensus test, replay of a real database, or formal cryptographic audit.
 
 ## Critical unresolved protocol issue: current PoC does not prove physical storage capacity
 
