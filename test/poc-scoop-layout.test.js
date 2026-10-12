@@ -9,7 +9,7 @@ const {
   plotScoopCount,
 } = require('../src/crypto-utils/crypto');
 
-test('PoC v4 sampling modulus matches the 32-byte leaf layout', () => {
+test('PoC sampling modulus matches the declared 32-byte leaf layout', () => {
   assert.equal(SCOOP_SIZE, 32);
   assert.equal(SCOOPS_PER_NONCE, 8192);
   assert.equal(MINING_SCOOP_MODULUS, SCOOPS_PER_NONCE);
