@@ -3,7 +3,7 @@
   "version": "3.6.0",
   "private": true,
   "engines": {
-  "node": "22.x"
+    "node": "22.x"
   },
   "bin": {
     "choco": "./chocohub.js"
@@ -29,9 +29,11 @@
     "ethers": "^6.13.0",
     "express": "^5.2.1",
     "helmet": "^8.2.0",
-    "localtunnel": "^2.0.2",
     "noble-ed25519": "^1.2.6",
     "solc": "^0.8.28",
     "ws": "^8.21.0"
+  },
+  "overrides": {
+    "tmp": "0.2.7"
   }
 }
