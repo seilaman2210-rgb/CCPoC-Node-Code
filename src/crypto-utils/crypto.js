@@ -788,11 +788,11 @@ function deriveSampleIndexes(challengeSeed, totalScoops, sampleCount, round, plo
   // untrusted input. Normal PoC challenges should only request small samples.
   const MAX_SAMPLE_COUNT = 1_000_000;
   if (sampleCount > MAX_SAMPLE_COUNT) {
-    throw new RangeError(\`sampleCount exceeds the limit of \${MAX_SAMPLE_COUNT}\`);
+    throw new RangeError('sampleCount exceeds the limit of ' + MAX_SAMPLE_COUNT);
   }
   if (sampleCount === 0) return [];
 
-  const seed = sha256hex(\`\${String(challengeSeed)}:\${String(plotId)}:\${String(round)}\`);
+  const seed = sha256hex(String(challengeSeed) + ':' + String(plotId) + ':' + String(round));
   const range = 1n << 256n;
   let hashCounter = 0;
 
@@ -802,7 +802,7 @@ function deriveSampleIndexes(challengeSeed, totalScoops, sampleCount, round, plo
     const bound = BigInt(exclusiveUpperBound);
     const limit = range - (range % bound);
     while (true) {
-      const digest = sha256hex(\`\${seed}:\${hashCounter++}\`);
+      const digest = sha256hex(seed + ':' + hashCounter++);
       const value = BigInt('0x' + digest);
       if (value < limit) return Number(value % bound);
     }
