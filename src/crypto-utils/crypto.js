@@ -335,8 +335,36 @@ function computeMerkleProofBuf2(buf, N, leafIndex) {
   return proof;
 }
 
+function _asHash32(value) {
+  try {
+    if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+      const buf = Buffer.from(value);
+      return buf.length === 32 ? buf : null;
+    }
+    if (typeof value !== 'string') return null;
+    const hex = value.startsWith('0x') || value.startsWith('0X') ? value.slice(2) : value;
+    if (!/^[0-9a-fA-F]{64}$/.test(hex)) return null;
+    return Buffer.from(hex, 'hex');
+  } catch {
+    return null;
+  }
+}
+
 function verifyMerkleProofBuf(leafHash, leafIndex, totalLeaves, proof, root) {
-  let hash = Buffer.isBuffer(leafHash) ? leafHash : Buffer.from(leafHash, 'hex');
+  if (!Number.isSafeInteger(leafIndex) || !Number.isSafeInteger(totalLeaves)
+      || totalLeaves < 1 || leafIndex < 0 || leafIndex >= totalLeaves
+      || !Array.isArray(proof)) {
+    return false;
+  }
+
+  let hash = _asHash32(leafHash);
+  const rootBuf = _asHash32(root);
+  if (!hash || !rootBuf) return false;
+
+  // Require the canonical path length. This both prevents ignored trailing
+  // siblings and bounds proof processing before any hashing occurs.
+  if (proof.length !== expectedMerkleProofLen(leafIndex, totalLeaves)) return false;
+
   let idx = leafIndex;
   let count = totalLeaves;
   let pIdx = 0;
@@ -344,22 +372,21 @@ function verifyMerkleProofBuf(leafHash, leafIndex, totalLeaves, proof, root) {
     const isOddLast = (count % 2 === 1 && idx === count - 1);
     if (isOddLast) {
       hash = sha256buf(Buffer.concat([hash, hash]));
-    } else if (idx % 2 === 0) {
-      if (pIdx >= proof.length) return false;
-      const sibling = Buffer.isBuffer(proof[pIdx]) ? proof[pIdx] : Buffer.from(proof[pIdx], 'hex');
-      hash = sha256buf(Buffer.concat([hash, sibling]));
-      pIdx++;
     } else {
-      if (pIdx >= proof.length) return false;
-      const sibling = Buffer.isBuffer(proof[pIdx]) ? proof[pIdx] : Buffer.from(proof[pIdx], 'hex');
-      hash = sha256buf(Buffer.concat([sibling, hash]));
+      const sibling = _asHash32(proof[pIdx]);
+      if (!sibling) return false;
+      if (idx % 2 === 0) {
+        hash = sha256buf(Buffer.concat([hash, sibling]));
+      } else {
+        hash = sha256buf(Buffer.concat([sibling, hash]));
+      }
       pIdx++;
     }
     idx = Math.floor(idx / 2);
     count = Math.ceil(count / 2);
   }
-  const rootBuf = Buffer.isBuffer(root) ? root : Buffer.from(root, 'hex');
-  return hash.equals(rootBuf);
+
+  return pIdx === proof.length && hash.equals(rootBuf);
 }
 
 function expectedMerkleProofLen(leafIndex, totalLeaves) {
