@@ -1372,7 +1372,7 @@ class Diff_Manager {
     if (candidates < 1n) {
       const fallbackSizeGb = Math.max(1, Number(this.cfg.initialPlotGb || 10));
       const total = plotScoopCount(fallbackSizeGb);
-      candidates = BigInt(Math.max(1, Math.ceil(total / MINING_SCOOP_MODULUS)));
+      candidates = BigInt(Math.max(1, Math.ceil(total / V4_SCOOPS_PER_NONCE)));
     }
     const bt = (BigInt(2) ** BigInt(64)) / (candidates * BigInt(blockTime));
     const MAX_BT = BigInt('1000000000000000000');
@@ -1393,7 +1393,7 @@ class Diff_Manager {
     if (candidates < 1n) {
       const fallbackSizeGb = Math.max(1, Number(this.cfg.initialPlotGb || 10));
       const total = plotScoopCount(fallbackSizeGb);
-      candidates = BigInt(Math.max(1, Math.ceil(total / MINING_SCOOP_MODULUS)));
+      candidates = BigInt(Math.max(1, Math.ceil(total / V4_SCOOPS_PER_NONCE)));
     }
     return (BigInt(2) ** BigInt(64)) / (candidates * BigInt(blockTime));
   }
