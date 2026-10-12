@@ -29,18 +29,20 @@ This is meaningful unit/syntax validation, but it is **not** an integration test
 
 ## Critical unresolved protocol issue: current PoC does not prove physical storage capacity
 
-The existing challenge is represented by a target scoop index modulo MINING_SCOOP_MODULUS, and verifiers accept a scoop when scoop_index % MINING_SCOOP_MODULUS equals that target. This lets a prover choose any congruent index rather than proving that a deterministically sampled index across the entire declared plot was selected. More fundamentally, a Merkle root commits to data but does not prove that the prover physically stores a plot of the claimed size. A prover can potentially construct a compact/fake tree whose leaf count matches the advertised plot size without storing the claimed data.
+The current PoC layout declares 8,192 32-byte leaves per nonce, but the previous sampling modulus was 4,096. That made two leaf positions per nonce eligible for a challenge. This branch aligns `MINING_SCOOP_MODULUS` with `SCOOPS_PER_NONCE` (8,192), so one fixed leaf slot is eligible in each complete nonce and miners still search that slot across all nonces. This is the core pattern used by Burst/Signum: a challenge selects a scoop slot, and candidates across nonces are evaluated. The modulo-class rule itself is therefore not the fundamental flaw; the layout and sampling parameters must agree.
 
-The metadata changes in this branch only ensure internal consistency between size, leaf count, and the proof tree. They **do not establish a sound Proof-of-Capacity protocol**, and the branch must not be treated as having solved plot grinding or fake-capacity attacks.
+This adjustment is a **consensus change**, not a drop-in production patch. It is not Burst byte-compatible: CCPoC currently treats each leaf as 32 bytes, whereas Signum/Burst scoops are 64 bytes (two 32-byte hashes) within 4,096 scoops per nonce. The new setting makes the CCPoC internal layout consistent with its own 8,192-leaf nonce, but all miners and validating nodes must activate the same version at a coordinated height.
 
-A real fix requires a versioned consensus/protocol change coordinated with miner/plot-generator software:
-1. Specify a canonical plot-generation algorithm and commitment format.
-2. Derive a full leaf index deterministically from the challenge and plot identity, rather than accepting any index in a modulo class.
-3. Define how the registered plot commitment is anchored before the challenge (e.g. in consensus-validated chain state), including deterministic validation of registration signatures and update rules.
-4. Define canonical size/count arithmetic, odd-tree semantics, and a protocol activation height/version.
-5. Add independent reference vectors and adversarial tests for fake plots, replay, duplicate leaves, invalid commitments, and differing node databases.
+More fundamentally, a Merkle root commits to data but does not prove that the prover physically stores a plot of the claimed size. A prover can choose arbitrary leaf contents, build a root, and announce the advertised leaf count; the verifier currently validates inclusion without recomputing each leaf from a canonical plot-generation algorithm. Registration is also local database/API state rather than a required consensus-anchored plot-commitment transaction, so a block received by a node that does not know the registration can be validated using the proof packet alone. These are the unresolved fake-capacity risks.
 
-The miner/plot-generation implementation is not present in this repository, so end-to-end interoperability cannot be checked here.
+To establish meaningful storage-hardness, a protocol upgrade must:
+1. Specify a canonical plot-generation algorithm, leaf/scoop format, nonce layout, and commitment format.
+2. Anchor each immutable plot commitment in consensus-validated state before it can be challenged; reject post-challenge registrations or root replacement deterministically on every node.
+3. Keep the Burst-style search across all nonces, but define exact target derivation, leaf serialization, proof encoding, and deadline calculation.
+4. Select a construction whose plotting/reconstruction cost makes time-memory trade-offs uneconomical. Chia's seven-table proof-of-space construction is one reference point; simply hashing `plot_id || index` would be too cheap to regenerate.
+5. Add independent reference vectors and adversarial tests for fake plots, grinding, replay, duplicate leaves, invalid commitments, registration timing, and nodes with different local databases.
+
+The miner/plot-generation implementation is not present in this repository, so end-to-end interoperability cannot be checked here. The modulus alignment removes the two-candidates-per-nonce mismatch, but it does **not establish a sound Proof-of-Capacity protocol** or solve physical-storage proofs.
 
 ## Other important unresolved issues
 
