@@ -1302,9 +1302,24 @@ class Chain {
 }
 
 class Diff_Manager {
-  constructor(db, cfg) {
+  constructor(db, cfg, chain = null) {
     this.db = db;
     this.cfg = cfg;
+    this.chain = chain;
+  }
+
+  _getConsensusPlotCommitments() {
+    try {
+      if (!this.chain || !this.chain.bestHash) return [];
+      // Do not let local API registrations, peer caches or immature roots
+      // alter a consensus difficulty calculation.
+      return this.chain.getActivePlotCommitments(
+        this.chain.bestHash,
+        Math.max(-1, this.chain.height - 1)
+      );
+    } catch {
+      return [];
+    }
   }
 
   _targetForHeight(height) {
@@ -1345,11 +1360,11 @@ class Diff_Manager {
     const blockTime = Math.max(1, this.cfg.expectedTimePerBlock || 60);
     let candidates = 0n;
     try {
-      const rows = this.db.prepare('SELECT DISTINCT plot_id, size_gb FROM plot_commitments').all();
+      const rows = this._getConsensusPlotCommitments();
       for (const r of rows) {
-        const sizeGb = Math.max(0.001, parseFloat(r.size_gb) || 0.001);
-        const total = plotScoopCount(sizeGb);
-        candidates += BigInt(Math.max(1, Math.ceil(total / MINING_SCOOP_MODULUS)));
+        const total = safeInt(r.total_scoops, 0);
+        if (total < V4_SCOOPS_PER_NONCE || total % V4_SCOOPS_PER_NONCE !== 0) continue;
+        candidates += BigInt(total / V4_SCOOPS_PER_NONCE);
       }
     } catch {}
     if (candidates < 1n) {
@@ -1366,11 +1381,11 @@ class Diff_Manager {
     const blockTime = Math.max(1, this.cfg.expectedTimePerBlock || 60);
     let candidates = 0n;
     try {
-      const rows = this.db.prepare('SELECT DISTINCT plot_id, size_gb FROM plot_commitments').all();
+      const rows = this._getConsensusPlotCommitments();
       for (const r of rows) {
-        const sizeGb = Math.max(0.001, parseFloat(r.size_gb) || 0.001);
-        const total = plotScoopCount(sizeGb);
-        candidates += BigInt(Math.max(1, Math.ceil(total / MINING_SCOOP_MODULUS)));
+        const total = safeInt(r.total_scoops, 0);
+        if (total < V4_SCOOPS_PER_NONCE || total % V4_SCOOPS_PER_NONCE !== 0) continue;
+        candidates += BigInt(total / V4_SCOOPS_PER_NONCE);
       }
     } catch {}
     if (candidates < 1n) {
