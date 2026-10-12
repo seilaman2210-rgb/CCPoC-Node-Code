@@ -778,28 +778,54 @@ function computeDeadline(scoopData, genSig, baseTarget) {
 }
 
 function deriveSampleIndexes(challengeSeed, totalScoops, sampleCount, round, plotId) {
-  const seed = sha256hex(`${challengeSeed}:${plotId}:${round}`);
-  if (sampleCount >= totalScoops) {
+  if (!Number.isSafeInteger(totalScoops) || totalScoops < 1) {
+    throw new RangeError('totalScoops must be a positive safe integer');
+  }
+  if (!Number.isSafeInteger(sampleCount) || sampleCount < 0 || sampleCount > totalScoops) {
+    throw new RangeError('sampleCount must be an integer between 0 and totalScoops');
+  }
+  // Avoid accidental unbounded allocations when this helper is given
+  // untrusted input. Normal PoC challenges should only request small samples.
+  const MAX_SAMPLE_COUNT = 1_000_000;
+  if (sampleCount > MAX_SAMPLE_COUNT) {
+    throw new RangeError(\`sampleCount exceeds the limit of \${MAX_SAMPLE_COUNT}\`);
+  }
+  if (sampleCount === 0) return [];
+
+  const seed = sha256hex(\`\${String(challengeSeed)}:\${String(plotId)}:\${String(round)}\`);
+  const range = 1n << 256n;
+  let hashCounter = 0;
+
+  // Uniform rejection sampling: do not parse hexadecimal as decimal or use
+  // modulo on an unrestricted hash, both of which bias the selected indices.
+  const randBelow = (exclusiveUpperBound) => {
+    const bound = BigInt(exclusiveUpperBound);
+    const limit = range - (range % bound);
+    while (true) {
+      const digest = sha256hex(\`\${seed}:\${hashCounter++}\`);
+      const value = BigInt('0x' + digest);
+      if (value < limit) return Number(value % bound);
+    }
+  };
+
+  if (sampleCount === totalScoops) {
     const indexes = Array.from({ length: totalScoops }, (_, i) => i);
-    let state = seed;
     for (let i = indexes.length - 1; i > 0; i--) {
-      state = sha256hex(`${state}:${i}`);
-      const j = safeInt(state.slice(0, 16), 0) % (i + 1);
+      const j = randBelow(i + 1);
       [indexes[i], indexes[j]] = [indexes[j], indexes[i]];
     }
     return indexes;
   }
-  const indexes = [];
-  const seen = new Set();
-  let counter = 0;
-  while (indexes.length < sampleCount) {
-    const h = sha256hex(`${seed}:${counter++}`);
-    const idx = safeInt(h.slice(0, 16), 0) % totalScoops;
-    if (!seen.has(idx)) { seen.add(idx); indexes.push(idx); }
-  }
-  return indexes;
-}
 
+  // Floyd's algorithm selects a uniform, unique subset in O(sampleCount)
+  // memory/time rather than repeatedly hashing until duplicates disappear.
+  const selected = new Set();
+  for (let j = totalScoops - sampleCount; j < totalScoops; j++) {
+    const candidate = randBelow(j + 1);
+    selected.add(selected.has(candidate) ? j : candidate);
+  }
+  return [...selected];
+}
 function getChainWorkForBlock(blk) {
   return safeBigInt((blk || {}).chain_work, 0n);
 }
