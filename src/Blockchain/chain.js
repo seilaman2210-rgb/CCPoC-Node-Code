@@ -484,6 +484,14 @@ class Chain {
     const rewardStr = String(reward);
     const totalTxFees = txs.reduce((s, t) => s + safeBigInt(t.fee, 0n), 0n);
     const gasUsed = txs.reduce((s, t) => s + estimateIntrinsicGas(t), 0);
+    const winningProof = bloco.winner_proof && typeof bloco.winner_proof === 'object' ? bloco.winner_proof : null;
+    const canonicalPlotId = winningProof ? String(winningProof.plot_id || '') : '';
+    const canonicalProofDigest = winningProof && /^[0-9a-fA-F]{64}$/.test(String(winningProof.scoop_data || ''))
+      ? sha256hex(Buffer.concat([
+        Buffer.from(String(winningProof.scoop_data), 'hex'),
+        Buffer.from(String(safeInt(winningProof.deadline, -1))),
+      ]))
+      : '';
     if (gasUsed > GAS_PARAMS.blockGasLimit) {
       return { ok: false, motivo: `block gas ${gasUsed} exceeds max block gas limit ${GAS_PARAMS.blockGasLimit}` };
     }
@@ -637,10 +645,10 @@ class Chain {
           total_fees_units, gas_used, gas_limit, base_target, base_fee, contract_state_root, forger, miner_public_key, rewards_json, winner_proof) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
           height, bloco.hash, bloco.parent_hash, bloco.timestamp, bloco.miner || '',
           bloco.challenge_id || '', bloco.tx_root || '', String(bloco.nonce || '0'),
-          bloco.difficulty || '0', String(bloco.target || '0'), '0',
+          '0', String(bloco.target || '0'), '0',
           rewardStr, txs.length, String(newWork), bloco.signature || '',
-          bloco.generation_signature || ZERO_HASH, bloco.proof_digest || '',
-          bloco.plot_id || '', bloco.state_root || '', blockOrigin,
+          bloco.generation_signature || ZERO_HASH, canonicalProofDigest,
+          canonicalPlotId, bloco.state_root || '', blockOrigin,
           String(totalTxFees), gasUsed, GAS_PARAMS.blockGasLimit, bloco.base_target || String(BigInt(2) ** BigInt(64) / BigInt(5898240)),
           String(this._baseFeeForHeight(height)),
           bloco.contract_state_root || '',
