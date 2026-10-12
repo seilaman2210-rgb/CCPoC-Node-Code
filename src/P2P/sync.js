@@ -1,6 +1,6 @@
 const { URL } = require('url');
 const { safeInt, safeBigInt, hashBlock, hashTransaction, isBetterChainCandidate } = require('../crypto-utils/crypto');
-const { verifyAnnouncement } = require('../crypto-utils/plot-capacity');
+const { verifyAnnouncement, validateImmutablePlotCommitment } = require('../crypto-utils/plot-capacity');
 const { log } = require('../../config/config');
 const { FINALIZATION_DEPTH } = require('../Blockchain/chain');
 
@@ -128,12 +128,31 @@ class SyncEngine {
           try { if (typeof norm.vrf_proof === 'string' && norm.vrf_proof) norm.vrf_proof = JSON.parse(norm.vrf_proof); } catch { norm.vrf_proof = ''; }
           const check = verifyAnnouncement(norm, { requireVrf: true, requireSig: true });
           if (!check.ok) continue;
-          this.db.prepare('INSERT OR REPLACE INTO peer_plot_commitments (plot_id, miner, merkle_root, size_gb, total_scoops, node_url, vrf_public_key, vrf_output, vrf_proof, signature, public_key, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+
+          // Pin the first valid commitment for a plot ID. A valid signature
+          // proves ownership, not permission to rewrite an existing plot root.
+          const pinnedLocal = this.db.prepare(
+            'SELECT merkle_root, size_gb, total_scoops FROM plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)'
+          ).get(pid, m);
+          const pinnedPeer = this.db.prepare(
+            'SELECT merkle_root, size_gb, total_scoops FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?) LIMIT 1'
+          ).get(pid, m);
+          const pinned = pinnedLocal || pinnedPeer;
+          const immutable = validateImmutablePlotCommitment(pinned, norm);
+          if (!immutable.ok) {
+            log('warn', `[P2P] Ignoring conflicting plot commitment ${pid.slice(0, 12)}… from ${base}: ${immutable.motivo}`);
+            continue;
+          }
+          this.db.prepare('INSERT OR IGNORE INTO peer_plot_commitments (plot_id, miner, merkle_root, size_gb, total_scoops, node_url, vrf_public_key, vrf_output, vrf_proof, signature, public_key, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
             .run(pid, m, norm.merkle_root, norm.size_gb, norm.total_scoops, base,
               norm.vrf_public_key, norm.vrf_output, JSON.stringify(norm.vrf_proof || ''),
               norm.signature, norm.public_key, Math.floor(Date.now() / 1000));
+          const saved = this.db.prepare(
+            'SELECT plot_id, miner, merkle_root, size_gb, total_scoops FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?) AND node_url = ?'
+          ).get(pid, m, base);
+          if (!validateImmutablePlotCommitment(saved, norm).ok) continue;
           log('info', `[P2P] Plot ${pid.slice(0, 12)}… de ${m.slice(0, 12)}… aprendido de ${base} (on-demand)`);
-          return this.db.prepare('SELECT plot_id, miner, merkle_root, size_gb, total_scoops FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)').get(pid, m);
+          return saved;
         }
       }
     } catch (e) { log('debug', `fetchPlotCommitment falhou: ${e.message}`); }
@@ -148,14 +167,36 @@ class SyncEngine {
       for (const ann of data.plots) {
         const check = verifyAnnouncement(ann, { requireVrf: true, requireSig: true });
         if (!check.ok) continue;
-        this.db.prepare(`INSERT OR REPLACE INTO peer_plot_commitments
+        const plotId = String(ann.plot_id);
+        const miner = String(ann.miner).toLowerCase();
+        const candidate = {
+          merkle_root: String(ann.merkle_root),
+          size_gb: parseFloat(ann.size_gb) || 0,
+          total_scoops: safeInt(ann.total_scoops, 0),
+        };
+        const pinnedLocal = this.db.prepare(
+          'SELECT merkle_root, size_gb, total_scoops FROM plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)'
+        ).get(plotId, miner);
+        const pinnedPeer = this.db.prepare(
+          'SELECT merkle_root, size_gb, total_scoops FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?) LIMIT 1'
+        ).get(plotId, miner);
+        const immutable = validateImmutablePlotCommitment(pinnedLocal || pinnedPeer, candidate);
+        if (!immutable.ok) {
+          log('warn', `[P2P] Ignoring conflicting plot commitment ${plotId.slice(0, 12)}… from ${originUrl}: ${immutable.motivo}`);
+          continue;
+        }
+        this.db.prepare(`INSERT OR IGNORE INTO peer_plot_commitments
           (plot_id, miner, merkle_root, size_gb, total_scoops, node_url, vrf_public_key, vrf_output, vrf_proof, signature, public_key, created_at)
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-          String(ann.plot_id), String(ann.miner).toLowerCase(), String(ann.merkle_root),
-          parseFloat(ann.size_gb) || 0, safeInt(ann.total_scoops, 0), originUrl, String(ann.vrf_public_key || ''),
+          plotId, miner, candidate.merkle_root,
+          candidate.size_gb, candidate.total_scoops, originUrl, String(ann.vrf_public_key || ''),
           String(ann.vrf_output || ''), JSON.stringify(ann.vrf_proof || ''),
           String(ann.signature || ''), String(ann.public_key || ''), Math.floor(Date.now() / 1000),
         );
+        const saved = this.db.prepare(
+          'SELECT merkle_root, size_gb, total_scoops FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?) AND node_url = ?'
+        ).get(plotId, miner, originUrl);
+        if (!validateImmutablePlotCommitment(saved, candidate).ok) continue;
         stored++;
       }
       if (stored > 0) log('debug', `sync: loaded ${stored} verified plot announcements from ${peerUrl}`);
