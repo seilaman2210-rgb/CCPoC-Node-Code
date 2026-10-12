@@ -11,7 +11,7 @@ const SCOOP_SIZE = 32;
 const SCOOPS_PER_NONCE = 8192;
 const NONCE_BYTES = SCOOP_SIZE * SCOOPS_PER_NONCE;
 const GIB = 1024n * 1024n * 1024n;
-const MIN_PLOT_BYTES = GIB;
+const MIN_PLOT_BYTES = BigInt(NONCE_BYTES);
 const MAX_PLOT_BYTES = 10240n * GIB;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const NONCE_DOMAIN = Buffer.from('CCPOC:PLOT:V4:NONCE\0', 'ascii');
@@ -50,9 +50,9 @@ function _validateCapacityBytes(value) {
     throw new TypeError('capacity_bytes must be an exact integer');
   }
   if (bytes < MIN_PLOT_BYTES || bytes > MAX_PLOT_BYTES) {
-    throw new RangeError('capacity_bytes must be between 1 GiB and 10 TiB');
+    throw new RangeError('capacity_bytes must be between one complete nonce and 10 TiB');
   }
-  if (bytes % GIB !== 0n) throw new RangeError('v4 plot capacity must be an integer number of GiB');
+  if (bytes % BigInt(NONCE_BYTES) !== 0n) throw new RangeError('v4 plot capacity must contain complete nonces');
   if (bytes % BigInt(NONCE_BYTES) !== 0n) throw new RangeError('plot capacity must contain complete nonces');
   const count = bytes / BigInt(SCOOP_SIZE);
   if (count > BigInt(Number.MAX_SAFE_INTEGER)) throw new RangeError('plot has too many leaves');
