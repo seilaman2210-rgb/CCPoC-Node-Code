@@ -27,8 +27,26 @@ jobs:
         shell: bash
         run: |
           npm audit fix
-          npm pkg set 'overrides.solc.tmp=0.2.7'
+          node <<'NODE'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          // solc@0.8.37 pins tmp@0.2.6, which is vulnerable. npm overrides
+          // forces this transitive dependency onto the patched tmp@0.2.7.
+          pkg.overrides = { ...(pkg.overrides || {}), tmp: '0.2.7' };
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\\n');
+          console.log('Applying npm overrides:', JSON.stringify(pkg.overrides));
+          NODE
           npm install --package-lock-only --ignore-scripts
+          node -e "
+            const pkg = require('./package.json');
+            const lock = require('./package-lock.json');
+            const tmp = lock.packages['node_modules/tmp'];
+            console.log('Resolved override:', JSON.stringify({ overrides: pkg.overrides, tmpVersion: tmp?.version, solcTmp: lock.packages['node_modules/solc']?.dependencies?.tmp }));
+            if (!pkg.overrides?.tmp || tmp?.version !== '0.2.7') {
+              console.error('The patched tmp version was not applied to the lockfile.');
+              process.exit(1);
+            }
+          "
           npm ci
           npm audit --json > npm-audit-after.json || true
           node -e "
