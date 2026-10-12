@@ -440,6 +440,13 @@ class Chain {
       if (!this._txRootMatches(bloco)) return { ok: false, motivo: 'tx_root mismatch' };
       if (safeInt(bloco.tx_count, txs.length) !== txs.length) return { ok: false, motivo: 'tx_count mismatch' };
     }
+    const plotCommitmentCheck = this._validatePlotCommitmentTxs(
+      txs,
+      parent ? parent.hash : ZERO_HASH,
+      height
+    );
+    if (!plotCommitmentCheck.ok) return { ok: false, motivo: plotCommitmentCheck.motivo };
+    const plotCommitmentsToApply = plotCommitmentCheck.commitments;
     if (height > 0) {
       if (!bloco.signature) return { ok: false, motivo: 'block not signed' };
       let signerPubKey = null;
@@ -791,6 +798,7 @@ class Chain {
           }
         }
         if (contractExec && contractExec.backup && contractExec.backup.length) this._recordContractStateChanges(height, bloco.hash, contractExec.backup);
+        this._persistPlotCommitmentEvents(plotCommitmentsToApply, bloco.hash);
         this._selectTip();
       })();
       if (height > 0) log('info', `Block #${height} accepted [${bloco.hash.slice(0, 10)}] from ${blockOrigin} (miner: ${(bloco.miner || '').slice(0, 10)}…)`);
