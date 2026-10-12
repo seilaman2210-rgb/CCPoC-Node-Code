@@ -26,7 +26,7 @@ jobs:
       - name: Apply compatible npm security updates
         shell: bash
         run: |
-          npm audit fix
+          npm audit fix || true
           node <<'NODE'
           const fs = require('fs');
           const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
