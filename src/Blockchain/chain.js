@@ -99,6 +99,115 @@ class Chain {
 
   setContractExecutor(sc) { this.contracts = sc; }
 
+  _isPlotCommitmentTx(tx) {
+    return !!(tx && isPlotCommitmentTxData(tx.data));
+  }
+
+  getPlotCommitment(plotId, ancestorHash = this.bestHash, maxBlockHeight = Number.MAX_SAFE_INTEGER) {
+    const id = String(plotId || '');
+    if (!/^[0-9a-f]{64}$/.test(id) || !ancestorHash) return null;
+    const maxHeight = safeInt(maxBlockHeight, Number.MAX_SAFE_INTEGER);
+    return this.db.prepare(`
+      WITH RECURSIVE ancestors(hash, parent_hash, height) AS (
+        SELECT hash, parent_hash, height FROM blocks WHERE hash = ?
+        UNION ALL
+        SELECT p.hash, p.parent_hash, p.height
+          FROM blocks p JOIN ancestors a ON p.hash = a.parent_hash
+         WHERE a.height > 0
+      )
+      SELECT e.*
+        FROM plot_commitment_events e
+        JOIN ancestors a ON a.hash = e.block_hash
+       WHERE e.plot_id = ? AND e.block_height <= ?
+       ORDER BY e.block_height DESC, e.tx_index DESC
+       LIMIT 1
+    `).get(ancestorHash, id, maxHeight) || null;
+  }
+
+  getActivePlotCommitments(ancestorHash = this.bestHash, maxBlockHeight = Number.MAX_SAFE_INTEGER) {
+    if (!ancestorHash) return [];
+    const maxHeight = safeInt(maxBlockHeight, Number.MAX_SAFE_INTEGER);
+    return this.db.prepare(`
+      WITH RECURSIVE ancestors(hash, parent_hash, height) AS (
+        SELECT hash, parent_hash, height FROM blocks WHERE hash = ?
+        UNION ALL
+        SELECT p.hash, p.parent_hash, p.height
+          FROM blocks p JOIN ancestors a ON p.hash = a.parent_hash
+         WHERE a.height > 0
+      )
+      SELECT e.*
+        FROM plot_commitment_events e
+        JOIN ancestors a ON a.hash = e.block_hash
+       WHERE e.block_height <= ?
+       ORDER BY e.block_height ASC, e.tx_index ASC
+    `).all(ancestorHash, maxHeight);
+  }
+
+  _validatePlotCommitmentTxs(txs, parentHash, blockHeight) {
+    const commitments = [];
+    const seen = new Set();
+    for (let txIndex = 0; txIndex < txs.length; txIndex++) {
+      const tx = txs[txIndex];
+      const decoded = parsePlotCommitmentTxData(tx && tx.data);
+      if (!decoded.recognized) continue;
+      if (!decoded.ok) return { ok: false, motivo: decoded.motivo };
+      if (safeInt(blockHeight, 0) <= 0) {
+        return { ok: false, motivo: 'plot commitments cannot be registered in genesis' };
+      }
+      if (String(tx.to_addr || '') !== PLOT_COMMITMENT_RECIPIENT) {
+        return { ok: false, motivo: 'plot commitment transaction must target the canonical zero address' };
+      }
+      if (safeBigInt(tx.value, -1n) !== 0n) {
+        return { ok: false, motivo: 'plot commitment transaction value must be zero' };
+      }
+      const miner = String(tx.from_addr || '').toLowerCase();
+      if (!/^0x[0-9a-f]{40}$/.test(miner) || String(tx.from_addr || '') !== miner) {
+        return { ok: false, motivo: 'plot commitment sender must be a canonical lowercase EVM address' };
+      }
+      if (String(tx.chain_id == null ? '' : tx.chain_id) !== String(this.cfg.chainId == null ? '' : this.cfg.chainId)) {
+        return { ok: false, motivo: 'plot commitment transaction has the wrong chain_id' };
+      }
+      const commitment = decoded.commitment;
+      if (seen.has(commitment.plot_id)) {
+        return { ok: false, motivo: 'a block cannot register the same plot_id more than once' };
+      }
+      seen.add(commitment.plot_id);
+      if (this.getPlotCommitment(commitment.plot_id, parentHash)) {
+        return { ok: false, motivo: 'plot_id is already committed on this chain; plot IDs are immutable' };
+      }
+      commitments.push({
+        ...commitment,
+        miner,
+        tx_index: txIndex,
+        block_height: safeInt(blockHeight, 0),
+      });
+    }
+    return { ok: true, commitments };
+  }
+
+  _persistPlotCommitmentEvents(commitments, blockHash) {
+    const insert = this.db.prepare(`
+      INSERT OR IGNORE INTO plot_commitment_events
+        (block_hash, block_height, tx_index, plot_id, miner, merkle_root,
+         capacity_bytes, size_gb, total_scoops, format_version)
+      VALUES (?,?,?,?,?,?,?,?,?,?)
+    `);
+    for (const item of commitments || []) {
+      insert.run(
+        blockHash,
+        item.block_height,
+        item.tx_index,
+        item.plot_id,
+        item.miner,
+        item.merkle_root,
+        item.capacity_bytes,
+        item.size_gb,
+        item.total_scoops,
+        item.format_version || PLOT_FORMAT_VERSION
+      );
+    }
+  }
+
   _initGenesis() {
     const cfg = this.cfg;
     const now = cfg.genesisTimestamp || Math.floor(Date.now() / 1000);
