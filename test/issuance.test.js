@@ -23,3 +23,21 @@ test('supports one-block halving intervals and rejects invalid heights', () => {
   assert.throws(() => calculateEmissionThroughHeight(1.5, {}), RangeError);
   assert.throws(() => calculateEmissionThroughHeight(1, { halvingInterval: 0.5 }), RangeError);
 });
+
+test('matches per-height mining rewards across a deterministic small range', () => {
+  const { calculateMiningReward } = require('../src/crypto-utils/crypto');
+  for (const halvingInterval of [1, 2, 3, 5, 8]) {
+    for (const initialReward of [1n, 2n, 7n, 100n]) {
+      const cfg = { initialReward: String(initialReward), halvingInterval };
+      let expected = 0n;
+      for (let height = 0; height <= 40; height++) {
+        if (height > 0) expected += calculateMiningReward(height, cfg);
+        assert.equal(
+          calculateEmissionThroughHeight(height, cfg),
+          expected,
+          `height=${height}, interval=${halvingInterval}, reward=${initialReward}`,
+        );
+      }
+    }
+  }
+});
