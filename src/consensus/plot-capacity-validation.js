@@ -20,6 +20,9 @@ function validatePlotMetadata(sizeGb, totalScoops, expectedTotalScoops, maxPlotG
     count = totalScoops;
   } else if (typeof totalScoops === 'string' && /^[0-9]+$/.test(totalScoops)) {
     count = Number(totalScoops);
+    if (String(count) !== totalScoops) {
+      return { ok: false, motivo: 'total_scoops must use canonical integer notation' };
+    }
   } else {
     return { ok: false, motivo: 'total_scoops must be a positive integer' };
   }
