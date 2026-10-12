@@ -1132,6 +1132,13 @@ class Chain {
     const work = blk.chain_work || String(parentWork + this._blockWork(blk));
     const now = Math.floor(Date.now() / 1000);
     const txs = blk.transactions || [];
+    const plotCommitmentCheck = this._validatePlotCommitmentTxs(
+      txs,
+      blk.parent_hash || ZERO_HASH,
+      blk.height
+    );
+    if (!plotCommitmentCheck.ok) return { ok: false, motivo: plotCommitmentCheck.motivo };
+    const plotCommitmentsToApply = plotCommitmentCheck.commitments;
     const canonicalTxFees = txs.reduce((sum, tx) => sum + safeBigInt(tx.fee, 0n), 0n);
     const canonicalGasUsed = txs.reduce((sum, tx) => sum + estimateIntrinsicGas(tx), 0);
     const winningProof = blk.winner_proof && typeof blk.winner_proof === 'object' ? blk.winner_proof : null;
@@ -1189,6 +1196,7 @@ class Chain {
         if (contractExec && contractExec.backup && contractExec.backup.length) {
           this._recordContractStateChanges(blk.height, blk.hash, contractExec.backup);
         }
+        this._persistPlotCommitmentEvents(plotCommitmentsToApply, blk.hash);
       })();
       return { ok: true };
     } catch (e) {
