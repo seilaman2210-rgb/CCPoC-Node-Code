@@ -1,0 +1,36 @@
+name: Node.js validation
+
+on:
+  push:
+    branches:
+      - main
+      - review/deeper-consensus-hardening
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find . -path './node_modules' -prune -o -name '*.js' -type f -print0)
+      - name: Run unit tests
+        run: npm test
