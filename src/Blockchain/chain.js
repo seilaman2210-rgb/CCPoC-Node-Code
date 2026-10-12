@@ -551,7 +551,11 @@ class Chain {
             const cur = this.db.prepare('SELECT balance, nonce FROM users WHERE address = ?').get(tx.from_addr);
             if (cur) {
               const curBalance = safeBigInt(cur.balance, 0n);
-              const newBalance = curBalance - safeBigInt(tx.value, 0n) - safeBigInt(tx.fee, 0n);
+              // EVM-reverted contract transactions keep their nonce and pay the
+            // fee, but the transferred value must be reverted with execution.
+            const revertedContractTx = this._isContractOp(tx) && tx._ccApplied === false;
+            const valueDebit = revertedContractTx ? 0n : safeBigInt(tx.value, 0n);
+            const newBalance = curBalance - valueDebit - safeBigInt(tx.fee, 0n);
               this.db.prepare('UPDATE users SET balance = ?, nonce = ?, updated_at = ? WHERE address = ?').run(String(newBalance), Math.max(safeInt(cur.nonce, 0) + 1, safeInt(tx.nonce, 0) + 1), now, tx.from_addr);
             }
           }
@@ -1505,6 +1509,21 @@ class contracts_Manager {
 
   async _preExecuteContracts(bloco, txs) {
     const backup = [];
+    const backupAddresses = new Set();
+    const takeContractSnapshot = (address) => {
+      const snapshot = this._snapshotContractState(address);
+      const key = String(address || '').toLowerCase();
+      if (!backupAddresses.has(key)) {
+        backupAddresses.add(key);
+        backup.push(snapshot);
+      }
+      return snapshot;
+    };
+    const isRecoverableEvmFailure = (error) => !!error && (
+      error.code === 'VM_REVERT'
+      || error.code === 'EMPTY_RUNTIME_CODE'
+      || (error instanceof RangeError && /runtime code exceeds max size/i.test(error.message))
+    );
     const payouts = [];
     const logs = [];
     const blkCtx = this._blockContext(bloco);
@@ -1533,7 +1552,7 @@ class contracts_Manager {
         if (this._isCreateTx(tx)) {
           const nonce = safeInt(tx.nonce, 0);
           const address = this.chain.contracts.deriveContractAddress(tx.from_addr, nonce);
-          backup.push(this._snapshotContractState(address));
+          const txSnapshot = takeContractSnapshot(address);
           try {
             const res = await this.chain.contracts.CreateSmartContract(
               tx.data,
@@ -1549,22 +1568,25 @@ class contracts_Manager {
             if (res && Array.isArray(res.payouts)) payouts.push(...res.payouts);
             appendLogs(tx, res);
           } catch (e) {
+            if (!isRecoverableEvmFailure(e)) throw e;
+            this._restoreContractState([txSnapshot]);
             tx._ccError = e.message || String(e);
             tx._ccApplied = false;
           }
         } else if (this._isContractCall(tx)) {
           const to = tx.to_addr;
-          backup.push(this._snapshotContractState(to));
+          const txSnapshot = takeContractSnapshot(to);
           try {
             const res = await this.chain.contracts.runSmartContract(to, tx.from_addr, tx.data || '0x', safeBigInt(tx.value, 0n).toString(), tx.gas_limit, tx.gas_price, blkCtx, true);
-            if (safeBigInt(tx.value, 0n) > 0n) {
-              await this.chain.contracts.creditContractBalance(to, safeBigInt(tx.value, 0n).toString());
-            }
+            // runCall already applies msg.value, and runWithStorage persists the
+            // resulting contract balance. Crediting it again here double-counts value.
             tx._ccApplied = true;
             log('info', `[SMART CONTRACTS] Block contract call OK: to=${to} from=${tx.from_addr} gasUsed=${res ? res.gasUsed : '?'} data=${(tx.data || '0x').slice(0, 10)}`);
             if (res && Array.isArray(res.payouts)) payouts.push(...res.payouts);
             appendLogs(tx, res);
           } catch (e) {
+            if (!isRecoverableEvmFailure(e)) throw e;
+            this._restoreContractState([txSnapshot]);
             tx._ccError = e.message || String(e);
             tx._ccApplied = false;
             log('error', `[SMART CONTRACTS] Block contract call REVERTED: to=${to} from=${tx.from_addr} data=${(tx.data || '0x').slice(0, 42)} reason=${e.reason || 'none'} error=${e.message}`);
