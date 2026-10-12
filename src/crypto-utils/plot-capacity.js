@@ -11,6 +11,46 @@ function validatePlotCapacity(sizeGb, totalScoops) {
   return validatePlotMetadata(size, totalScoops, expectedScoops, MAX_PLOT_GB);
 }
 
+/**
+ * Treat a plot ID as an immutable commitment identifier. Replacing the root or
+ * capacity under the same (plot_id, miner) silently changes what a past proof
+ * claims to have used. Replotting must use a new plot_id.
+ */
+function validateImmutablePlotCommitment(existing, candidate) {
+  if (!existing) return { ok: true, unchanged: false };
+
+  const existingRoot = String(existing.merkle_root || '').toLowerCase();
+  const candidateRoot = String(candidate && candidate.merkle_root || '').toLowerCase();
+  if (!isMerkleRoot(existingRoot)) {
+    return { ok: false, motivo: 'existing plot commitment has no canonical root; register a new plot_id' };
+  }
+  if (!isMerkleRoot(candidateRoot) || existingRoot !== candidateRoot) {
+    return { ok: false, motivo: 'plot_id is immutable: merkle_root cannot be replaced; register a new plot_id' };
+  }
+
+  const existingSize = Number(existing.size_gb);
+  const candidateSize = Number(candidate && candidate.size_gb);
+  if (!Number.isFinite(existingSize) || !Number.isFinite(candidateSize) || existingSize !== candidateSize) {
+    return { ok: false, motivo: 'plot_id is immutable: size_gb cannot be changed; register a new plot_id' };
+  }
+
+  const parseCount = (value) => {
+    if (typeof value === 'number') return Number.isSafeInteger(value) && value > 0 ? value : null;
+    if (typeof value === 'string' && /^[1-9][0-9]*$/.test(value)) {
+      const n = Number(value);
+      return Number.isSafeInteger(n) ? n : null;
+    }
+    return null;
+  };
+  const existingCount = parseCount(existing.total_scoops);
+  const candidateCount = parseCount(candidate && candidate.total_scoops);
+  if (existingCount === null || candidateCount === null || existingCount !== candidateCount) {
+    return { ok: false, motivo: 'plot_id is immutable: total_scoops cannot be changed; register a new plot_id' };
+  }
+
+  return { ok: true, unchanged: true };
+}
+
 function makeLocalAnnouncement(plot, cfg, vrfOverrides = null) {
   const miner = String(plot.miner || '').toLowerCase();
   const merkleRoot = String(plot.merkle_root || '');
@@ -94,4 +134,4 @@ function verifyAnnouncement(ann, opts = {}) {
   return { ok: true };
 }
 
-module.exports = { makeLocalAnnouncement, verifyAnnouncement, validatePlotCapacity, isMerkleRoot, MAX_PLOT_GB };
+module.exports = { makeLocalAnnouncement, verifyAnnouncement, validatePlotCapacity, validateImmutablePlotCommitment, isMerkleRoot, MAX_PLOT_GB };
