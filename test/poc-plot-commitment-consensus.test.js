@@ -12,7 +12,7 @@ const {
 
 function setupChainFixture() {
   const db = new Database(':memory:');
-  db.exec(\`
+  db.exec(`
     CREATE TABLE blocks (
       hash TEXT PRIMARY KEY,
       parent_hash TEXT,
@@ -31,7 +31,7 @@ function setupChainFixture() {
       format_version INTEGER NOT NULL,
       PRIMARY KEY (block_hash, tx_index)
     );
-  \`);
+  `);
 
   const genesis = '01'.repeat(32);
   const main1 = '02'.repeat(32);
@@ -70,12 +70,12 @@ function makeCommitTx(overrides = {}) {
 }
 
 function insertCommit(db, blockHash, height, id = plotId, owner = miner) {
-  db.prepare(\`
+  db.prepare(`
     INSERT INTO plot_commitment_events
       (block_hash, block_height, tx_index, plot_id, miner, merkle_root,
        capacity_bytes, size_gb, total_scoops, format_version)
     VALUES (?,?,?,?,?,?,?,?,?,?)
-  \`).run(blockHash, height, 0, id, owner, root,
+  `).run(blockHash, height, 0, id, owner, root,
     String(NONCE_BYTES), NONCE_BYTES / (1024 ** 3), NONCE_BYTES / 32, 4);
 }
 
