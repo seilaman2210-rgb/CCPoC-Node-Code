@@ -11,6 +11,8 @@ const {
   encodePlotCommitmentTxData,
   parsePlotCommitmentTxData,
   deriveTargetScoopIndex,
+  derivePlotCapacitySampleIndexes,
+  CAPACITY_SAMPLE_COUNT,
   deriveCanonicalPlotLeaf,
   StreamingMerkleAccumulator,
   hashPair,
@@ -72,6 +74,20 @@ test('challenge scoop is derived from the parent-bound challenge ID', () => {
   assert.ok(a >= 0 && a < SCOOPS_PER_NONCE);
   assert.notEqual(a, deriveTargetScoopIndex('cd'.repeat(32)));
   assert.throws(() => deriveTargetScoopIndex('not-a-hash'), /challenge_id/);
+});
+
+test('capacity spot checks are deterministic, unique, in range and exclude the target leaf', () => {
+  const totalScoops = 8192 * 4;
+  const challengeId = 'ab'.repeat(32);
+  const plotTarget = 1234;
+  const a = derivePlotCapacitySampleIndexes(challengeId, totalScoops, plotId, plotTarget);
+  const b = derivePlotCapacitySampleIndexes(challengeId, totalScoops, plotId, plotTarget);
+  assert.equal(a.length, CAPACITY_SAMPLE_COUNT);
+  assert.deepEqual(a, b);
+  assert.equal(new Set(a).size, CAPACITY_SAMPLE_COUNT);
+  assert.ok(a.every(index => Number.isSafeInteger(index) && index >= 0 && index < totalScoops && index !== plotTarget));
+  assert.notDeepEqual(a, derivePlotCapacitySampleIndexes('cd'.repeat(32), totalScoops, plotId, plotTarget));
+  assert.throws(() => derivePlotCapacitySampleIndexes(challengeId, CAPACITY_SAMPLE_COUNT, plotId, plotTarget), /too small/);
 });
 
 test('canonical leaf derivation is deterministic, scoped to owner, plot and chain', () => {
