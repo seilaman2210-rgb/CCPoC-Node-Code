@@ -3,6 +3,12 @@ const { safeInt, safeBigInt, hashTransaction, pubkeyToAddress, calculateMiningRe
 const { log, getLogBuffer } = require('../../config/config');
 const { MAX_PLOT_GB, makeLocalAnnouncement, verifyAnnouncement, validatePlotCapacity, validateImmutablePlotCommitment, isMerkleRoot } = require('../crypto-utils/plot-capacity');
 const { estimateIntrinsicGas, minimumFee } = require('../consensus/gas');
+const {
+  PLOT_FORMAT_VERSION,
+  GIB: PLOT_GIB,
+  ZERO_ADDRESS: PLOT_COMMITMENT_RECIPIENT,
+  encodePlotCommitmentTxData,
+} = require('../consensus/poc-plot-v4');
 
 const CC_SCALE = 10n ** 18n;
 function parseCcAmount(value) {
@@ -466,7 +472,47 @@ app.get('/api/state', (req, res) => {
 
     app.get('/api/poc/plots/:miner', (req, res) => {
       const normalizedAddress = String(req.params.miner || '').toLowerCase();
-      res.json({ plots: this.db.prepare('SELECT * FROM plot_commitments WHERE lower(miner) = ?').all(normalizedAddress) });
+      const plots = this.chain.getActivePlotCommitments(
+        this.chain.bestHash,
+        Math.max(-1, this.chain.height - 1)
+      ).filter(plot => String(plot.miner || '').toLowerCase() === normalizedAddress);
+      // Legacy/local registrations are exposed separately and are not accepted
+      // as consensus commitments by the v4 proof verifier.
+      const legacyLocalPlots = this.db.prepare(
+        'SELECT * FROM plot_commitments WHERE lower(miner) = ?'
+      ).all(normalizedAddress);
+      res.json({ plots, consensus_anchored: true, legacy_local_plots: legacyLocalPlots });
+    });
+
+    app.post('/api/poc/commitment/encode', mutationLimiter, (req, res) => {
+      const body = req.body || {};
+      const { plot_id, merkle_root, capacity_gb } = body;
+      if (plot_id == null || merkle_root == null || capacity_gb == null) {
+        return res.status(400).json({ error: 'plot_id, merkle_root and capacity_gb are required' });
+      }
+      const sizeGb = Number(capacity_gb);
+      if (!Number.isSafeInteger(sizeGb) || sizeGb < 1 || sizeGb > MAX_PLOT_GB) {
+        return res.status(400).json({ error: `capacity_gb must be an integer from 1 to ${MAX_PLOT_GB}` });
+      }
+      try {
+        const data = encodePlotCommitmentTxData({
+          plot_id: String(plot_id),
+          merkle_root: String(merkle_root),
+          capacity_bytes: (BigInt(sizeGb) * PLOT_GIB).toString(),
+        });
+        return res.json({
+          format_version: PLOT_FORMAT_VERSION,
+          to_addr: PLOT_COMMITMENT_RECIPIENT,
+          value: '0',
+          data,
+          plot_id: String(plot_id).replace(/^0x/i, '').toLowerCase(),
+          merkle_root: String(merkle_root).replace(/^0x/i, '').toLowerCase(),
+          capacity_gb: sizeGb,
+          note: 'This only encodes the payload. Submit it as a normal signed transaction; the plot is committed only after that transaction is included in a valid block.',
+        });
+      } catch (e) {
+        return res.status(400).json({ error: e.message || 'invalid plot commitment' });
+      }
     });
 
     // if you are checking this code, you are probably asking yourself why theres 2 register_plots
