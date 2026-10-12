@@ -5,6 +5,7 @@ const { ZkpService } = require('../crypto-utils/zkp-service');
 const { SnapSyncService } = require('../snap/snap-service');
 const { hashBlockAsync, verifySignatureAsync } = require('../utils/worker-pool');
 const { estimateIntrinsicGas, nextBaseFee, GAS_PARAMS, capTxGasLimit, minimumFee } = require('../consensus/gas');
+const { validatePlotCapacity } = require('../crypto-utils/plot-capacity');
 const { isWithinRatio } = require('../consensus/base-target-validation');
 const { log } = require('../../config/config');
 const { createBlock } = require('@ethereumjs/block');
@@ -406,18 +407,35 @@ class Chain {
         if (!/^[0-9a-fA-F]{64}$/.test(merkleRootClaim)) {
           return { ok: false, motivo: 'winner_proof missing merkle_root' };
         }
-        const knownPlot = this.db.prepare('SELECT merkle_root, size_gb FROM plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)').get(wpPlotId, wpMiner)
-          || this.db.prepare('SELECT merkle_root, size_gb FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)').get(wpPlotId, wpMiner);
+        const winnerReward = Array.isArray(bloco.rewards)
+          ? bloco.rewards.find(r => r && normalizeAddr(r.miner || '') === wpMiner
+            && String(r.plot_id || '') === wpPlot
+            && safeInt(r.deadline, -1) === wpDeadline)
+          : null;
+        if (!winnerReward || winnerReward.size_gb == null) {
+          return { ok: false, motivo: 'winner reward must commit the plot size for capacity validation' };
+        }
+        const rewardCapacity = validatePlotCapacity(winnerReward.size_gb, totalScoops);
+        if (!rewardCapacity.ok) {
+          return { ok: false, motivo: `winner_proof capacity mismatch: ${rewardCapacity.motivo}` };
+        }
+
+        const knownPlot = this.db.prepare('SELECT merkle_root, size_gb, total_scoops FROM plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)').get(wpPlotId, wpMiner)
+          || this.db.prepare('SELECT merkle_root, size_gb, total_scoops FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)').get(wpPlotId, wpMiner);
         if (knownPlot && knownPlot.merkle_root) {
           if (knownPlot.merkle_root.toLowerCase() !== merkleRootClaim.toLowerCase()) {
             return { ok: false, motivo: 'winner_proof merkle_root does not match committed plot root' };
           }
+          if (Number(knownPlot.size_gb) !== rewardCapacity.sizeGb) {
+            return { ok: false, motivo: 'winner reward plot size does not match registered plot' };
+          }
+          const registeredScoops = safeInt(knownPlot.total_scoops, 0) || totalScoops;
+          const registeredCapacity = validatePlotCapacity(knownPlot.size_gb, registeredScoops);
+          if (!registeredCapacity.ok || registeredScoops !== totalScoops) {
+            return { ok: false, motivo: 'winner_proof total_scoops does not match registered plot capacity' };
+          }
         } else {
           log('debug', `addBlock #${height}: plot ${wpPlotId.slice(0, 12)}… sem commitment local, validação autónoma`);
-          const needProofLen = expectedMerkleProofLen(scoopIndex, totalScoops);
-          if (merkleProof.length !== needProofLen) {
-            return { ok: false, motivo: `winner_proof merkle proof length ${merkleProof.length} inconsistent with scoop_index ${scoopIndex} for ${totalScoops} scoops (expected ${needProofLen})` };
-          }
         }
         const expectedTargetIdx = challenge.target_scoop_index != null
           ? safeInt(challenge.target_scoop_index, -1)
