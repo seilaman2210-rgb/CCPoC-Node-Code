@@ -486,19 +486,42 @@ app.get('/api/state', (req, res) => {
 
     app.post('/api/poc/commitment/encode', mutationLimiter, (req, res) => {
       const body = req.body || {};
-      const { plot_id, merkle_root, capacity_gb } = body;
-      if (plot_id == null || merkle_root == null || capacity_gb == null) {
-        return res.status(400).json({ error: 'plot_id, merkle_root and capacity_gb are required' });
-      }
-      const sizeGb = Number(capacity_gb);
-      if (!Number.isSafeInteger(sizeGb) || sizeGb < 1 || sizeGb > MAX_PLOT_GB) {
-        return res.status(400).json({ error: `capacity_gb must be an integer from 1 to ${MAX_PLOT_GB}` });
+      const { plot_id, merkle_root, capacity_bytes, capacity_gb } = body;
+      if (plot_id == null || merkle_root == null || (capacity_bytes == null && capacity_gb == null)) {
+        return res.status(400).json({ error: 'plot_id, merkle_root and capacity_bytes (or capacity_gb) are required' });
       }
       try {
+        let capacityBytes;
+        if (capacity_bytes != null) {
+          if (typeof capacity_bytes !== 'string' && typeof capacity_bytes !== 'number') {
+            return res.status(400).json({ error: 'capacity_bytes must be an exact integer string or safe integer' });
+          }
+          const rawBytes = String(capacity_bytes);
+          if (!/^(?:0|[1-9][0-9]*)$/.test(rawBytes)) {
+            return res.status(400).json({ error: 'capacity_bytes must use canonical unsigned decimal notation' });
+          }
+          capacityBytes = BigInt(rawBytes);
+        } else {
+          const rawGb = String(capacity_gb);
+          const m = /^(?:0|[1-9][0-9]*)(?:\.([0-9]+))?$/.exec(rawGb);
+          if (!m) return res.status(400).json({ error: 'capacity_gb must be a canonical decimal number' });
+          const whole = rawGb.split('.')[0];
+          const fraction = m[1] || '';
+          const scale = 10n ** BigInt(fraction.length);
+          const numerator = BigInt(whole) * scale + BigInt(fraction || '0');
+          const bytesNumerator = numerator * PLOT_GIB;
+          if (bytesNumerator % scale !== 0n) {
+            return res.status(400).json({ error: 'capacity_gb must convert to an exact integer number of bytes; use capacity_bytes for exact sizing' });
+          }
+          capacityBytes = bytesNumerator / scale;
+        }
+        if (capacityBytes < 1n || capacityBytes > BigInt(MAX_PLOT_GB) * PLOT_GIB) {
+          return res.status(400).json({ error: `capacity must be above zero and no larger than ${MAX_PLOT_GB} GiB` });
+        }
         const data = encodePlotCommitmentTxData({
           plot_id: String(plot_id),
           merkle_root: String(merkle_root),
-          capacity_bytes: (BigInt(sizeGb) * PLOT_GIB).toString(),
+          capacity_bytes: capacityBytes.toString(),
         });
         return res.json({
           format_version: PLOT_FORMAT_VERSION,
@@ -507,8 +530,9 @@ app.get('/api/state', (req, res) => {
           data,
           plot_id: String(plot_id).replace(/^0x/i, '').toLowerCase(),
           merkle_root: String(merkle_root).replace(/^0x/i, '').toLowerCase(),
-          capacity_gb: sizeGb,
-          note: 'This only encodes the payload. Submit it as a normal signed transaction; the plot is committed only after that transaction is included in a valid block.',
+          capacity_bytes: capacityBytes.toString(),
+          capacity_gb: Number(capacityBytes) / Number(PLOT_GIB),
+          note: 'This only encodes the payload. Submit it as a normal signed transaction; the plot is committed only after that transaction is included in a valid block. A plot ID can only be committed once.',
         });
       } catch (e) {
         return res.status(400).json({ error: e.message || 'invalid plot commitment' });
