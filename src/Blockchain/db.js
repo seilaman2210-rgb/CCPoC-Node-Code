@@ -212,6 +212,7 @@ function initDB(dbPath, cfg) {
   try { db.prepare('ALTER TABLE challenge_submissions ADD COLUMN total_scoops INTEGER DEFAULT 0').run(); } catch {}
   try { db.prepare('ALTER TABLE challenge_submissions ADD COLUMN merkle_proof TEXT DEFAULT ""').run(); } catch {}
   try { db.prepare('ALTER TABLE challenge_submissions ADD COLUMN merkle_root TEXT DEFAULT ""').run(); } catch {}
+  try { db.prepare('ALTER TABLE challenge_submissions ADD COLUMN public_key TEXT DEFAULT ""').run(); } catch {}
 
   try {
     db.prepare('DELETE FROM challenge_submissions WHERE id NOT IN (SELECT MIN(id) FROM challenge_submissions GROUP BY challenge_id, miner, plot_id, deadline)').run();
