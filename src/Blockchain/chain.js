@@ -1006,6 +1006,16 @@ class Chain {
     const work = blk.chain_work || String(parentWork + this._blockWork(blk));
     const now = Math.floor(Date.now() / 1000);
     const txs = blk.transactions || [];
+    const canonicalTxFees = txs.reduce((sum, tx) => sum + safeBigInt(tx.fee, 0n), 0n);
+    const canonicalGasUsed = txs.reduce((sum, tx) => sum + estimateIntrinsicGas(tx), 0);
+    const winningProof = blk.winner_proof && typeof blk.winner_proof === 'object' ? blk.winner_proof : null;
+    const canonicalPlotId = winningProof ? String(winningProof.plot_id || '') : '';
+    const canonicalProofDigest = winningProof && /^[0-9a-fA-F]{64}$/.test(String(winningProof.scoop_data || ''))
+      ? sha256hex(Buffer.concat([
+        Buffer.from(String(winningProof.scoop_data), 'hex'),
+        Buffer.from(String(safeInt(winningProof.deadline, -1))),
+      ]))
+      : '';
     const contractTxs = txs.filter(t => this._isContractOp(t));
     let contractExec = null;
     if (contractTxs.length) {
@@ -1022,11 +1032,11 @@ class Chain {
           reward_units, reward_cc, tx_count, chain_work, signature, generation_signature, proof_digest, plot_id, state_root, origin,
           total_fees_units, gas_used, gas_limit, base_target, base_fee, contract_state_root, forger, miner_public_key, rewards_json, winner_proof) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
           blk.height, blk.hash, blk.parent_hash || '', blk.timestamp || now, blk.miner || '',
-          blk.challenge_id || '', blk.tx_root || '', String(blk.nonce || '0'), blk.difficulty || '0',
+          blk.challenge_id || '', blk.tx_root || '', String(blk.nonce || '0'), '0',
           String(blk.target || '0'), '0', blk.reward_cc || '0', blk.tx_count || 0,
-          String(work), blk.signature || '', blk.generation_signature || ZERO_HASH, blk.proof_digest || '',
-          blk.plot_id || '', blk.state_root || '', blk.origin || 'reorg',
-          blk.total_fees_units || '0', blk.gas_used || 0, GAS_PARAMS.blockGasLimit, blk.base_target || String(BigInt(2) ** BigInt(64) / BigInt(5898240)),
+          String(work), blk.signature || '', blk.generation_signature || ZERO_HASH, canonicalProofDigest,
+          canonicalPlotId, blk.state_root || '', blk.origin || 'reorg',
+          String(canonicalTxFees), canonicalGasUsed, GAS_PARAMS.blockGasLimit, blk.base_target || String(BigInt(2) ** BigInt(64) / BigInt(5898240)),
           String(this._baseFeeForHeight(blk.height)),
           blk.contract_state_root || '',
           blk.forger || '',
