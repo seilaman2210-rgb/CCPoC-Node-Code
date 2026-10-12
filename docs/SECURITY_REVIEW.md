@@ -18,6 +18,8 @@ A dependency-backed GitHub Actions run installs the lockfile, runs `node --check
 - Derive selected non-hashed block metadata locally rather than trusting peer-provided values for them.
 - Revert EVM state checkpoints after failed execution, restore per-transaction contract snapshots on recognized reverts, avoid crediting a successful contract call's value twice, and avoid debiting the transferred value for a reverted contract transaction.
 - Add Node's built-in tests for the new pure helpers.
+- Remove the unused `localtunnel` dependency and remediate npm audit findings by updating the lockfile, including `axios` 1.20.0, `proxy-addr` 2.0.8, `qs` 6.16.0, and `solc` 0.8.37.
+- Override `solc`'s pinned `tmp` dependency to patched version 0.2.7; preserve the resolution in the root package manifest so clean installs are reproducible.
 
 ## Validation completed
 
@@ -30,6 +32,8 @@ A GitHub Actions run on this branch successfully installed the locked dependenci
 - PoC layout checks: 32-byte leaf size, 8,192 entries per nonce, 1 GiB capacity arithmetic, and one eligible slot per complete nonce.
 - Plot commitment immutability checks: idempotent registration, root/size/count replacement rejection, and legacy rootless rows.
 - Sample-index helper checks: determinism, uniqueness, bounds, full permutations, zero samples, invalid input handling, and oversized-sample rejection.
+
+The dependency remediation run additionally executed `npm audit` against the final clean install and reported **0 vulnerabilities** (12 October 2026). It also ran `npm ci`, the full JavaScript syntax pass, and all 31 tests successfully.
 
 This is meaningful unit/syntax validation, but it is **not** an integration test of a running node, multi-node consensus test, replay of a real database, or formal cryptographic audit.
 
