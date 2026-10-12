@@ -9,6 +9,7 @@ const {
   proofMessage,
   signMessage,
   privateKeyToAddress,
+  secpPublicKeyFromPrivate,
 } = require('../src/crypto-utils/crypto');
 const {
   PLOT_FORMAT_VERSION,
@@ -132,6 +133,7 @@ function main() {
     challenge_seed: challengeSeed,
     base_target: baseTarget,
     miner: recoveredAddress,
+    public_key: secpPublicKeyFromPrivate(privateKey).toString('base64'),
     plot_id: metadata.plot_id,
     merkle_root: metadata.merkle_root,
     total_scoops: totalScoops,
