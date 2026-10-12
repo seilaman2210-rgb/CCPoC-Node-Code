@@ -1,7 +1,7 @@
 const path = require('path');
 const { safeInt, safeBigInt, hashTransaction, pubkeyToAddress, calculateMiningReward, verifySignature, plotRegisterMessage, evmTxHash, recoverTransactionSender, vrfProve, vrfVerify } = require('../crypto-utils/crypto');
 const { log, getLogBuffer } = require('../../config/config');
-const { MAX_PLOT_GB, makeLocalAnnouncement, verifyAnnouncement, validatePlotCapacity, isMerkleRoot } = require('../crypto-utils/plot-capacity');
+const { MAX_PLOT_GB, makeLocalAnnouncement, verifyAnnouncement, validatePlotCapacity, validateImmutablePlotCommitment, isMerkleRoot } = require('../crypto-utils/plot-capacity');
 const { estimateIntrinsicGas, minimumFee } = require('../consensus/gas');
 
 const CC_SCALE = 10n ** 18n;
@@ -534,9 +534,34 @@ app.get('/api/state', (req, res) => {
           if (!vrfVerified) return res.status(400).json({ error: 'invalid VRF capacity commitment' });
         } catch { return res.status(400).json({ error: 'invalid VRF capacity commitment' }); }
       }
+      // A plot_id identifies one immutable root and capacity. A new plot/root
+      // must use a new ID; INSERT OR REPLACE would rewrite history silently.
+      const candidateCommitment = {
+        merkle_root: String(merkle_root),
+        size_gb: parsedSize,
+        total_scoops: capacityCheck.totalScoops,
+      };
+      const existingCommitment = this.db.prepare(
+        'SELECT merkle_root, size_gb, total_scoops FROM plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)'
+      ).get(String(plot_id), normalizedAddress);
+      const existingCheck = validateImmutablePlotCommitment(existingCommitment, candidateCommitment);
+      if (!existingCheck.ok) {
+        return res.status(409).json({ error: existingCheck.motivo, require_new_plot_id: true });
+      }
+
       const now = Math.floor(Date.now() / 1000);
-      this.db.prepare('INSERT OR REPLACE INTO plot_commitments (plot_id, miner, merkle_root, size_gb, total_scoops, vrf_public_key, vrf_output, vrf_proof, vrf_verified, public_key, signature, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-        .run(plot_id, normalizedAddress, merkle_root, parsedSize, safeInt(total_scoops, 0), vrfPublicKey, vrfOutput, JSON.stringify(vrfProof || ''), vrfVerified, public_key, signature, now);
+      this.db.prepare('INSERT OR IGNORE INTO plot_commitments (plot_id, miner, merkle_root, size_gb, total_scoops, vrf_public_key, vrf_output, vrf_proof, vrf_verified, public_key, signature, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(String(plot_id), normalizedAddress, String(merkle_root), parsedSize, capacityCheck.totalScoops, vrfPublicKey, vrfOutput, JSON.stringify(vrfProof || ''), vrfVerified, public_key, signature, now);
+
+      // Re-read after INSERT OR IGNORE so a concurrent writer cannot make this
+      // endpoint report success for a conflicting commitment.
+      const savedCommitment = this.db.prepare(
+        'SELECT merkle_root, size_gb, total_scoops FROM plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)'
+      ).get(String(plot_id), normalizedAddress);
+      const savedCheck = validateImmutablePlotCommitment(savedCommitment, candidateCommitment);
+      if (!savedCheck.ok) {
+        return res.status(409).json({ error: savedCheck.motivo, require_new_plot_id: true });
+      }
       const existingUser = this.db.prepare('SELECT address FROM user_keys WHERE lower(address) = lower(?)').get(normalizedAddress);
       if (!existingUser) {
         this.db.prepare('INSERT INTO user_keys (address, public_key_secp256k1, created_at, updated_at) VALUES (?, ?, ?, ?)').run(normalizedAddress, public_key, now, now);
@@ -544,7 +569,7 @@ app.get('/api/state', (req, res) => {
         this.db.prepare('UPDATE user_keys SET public_key_secp256k1 = ?, updated_at = ? WHERE lower(address) = lower(?)').run(public_key, now, normalizedAddress);
       }
       log('info', `[MINERS] Plot registered (signed, VRF=${vrfVerified ? 'verified' : 'none'}): miner=${normalizedAddress}, plot_id=${plot_id}, size_gb=${size_gb}, merkle_root=${merkle_root}`);
-      res.json({ ok: true, plot_id, miner: normalizedAddress, vrf_verified: vrfVerified === 1 });
+      res.json({ ok: true, plot_id, miner: normalizedAddress, vrf_verified: vrfVerified === 1, unchanged: !!existingCommitment });
     });
 
     app.post('/api/poc/verify_plot', mutationLimiter, (req, res) => {
