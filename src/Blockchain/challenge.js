@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { ZERO_HASH, sha256hex, sha256buf, safeInt, safeBigInt, hashBlock, hashTransaction, merkleRoot, computeStateRootAfterTxs, calculateMiningReward, verifyMerkleProofBuf, computeDeadline, plotScoopCount, SCOOPS_PER_NONCE, MINING_SCOOP_MODULUS, verifySignature, canonicalTxMessage, proofMessage, recoverTransactionSender } = require('../crypto-utils/crypto');
 const { log } = require('../../config/config');
+const { validatePlotCapacity } = require('../crypto-utils/plot-capacity');
 
 
 class ChallengeManager {
@@ -67,17 +68,33 @@ class ChallengeManager {
     const plot = this.db.prepare('SELECT * FROM plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)').get(plotId, miner);
     const peerPlot = this.db.prepare('SELECT * FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)').get(plotId, miner);
     const commitment = plot || peerPlot;
-    const sizeGb = commitment ? (Number(commitment.size_gb) || 1) : 1;
-    const committedRoot = (commitment && commitment.merkle_root) || '';
-    if (!proofPacket || !proofPacket.scoop_data) return { ok: false, motivo: 'proof_packet with scoop_data required for PoC verification' };
-    if (!committedRoot) return { ok: false, motivo: 'plot has no merkle_root commitment' };
+    if (!commitment) return { ok: false, motivo: 'plot commitment not found' };
+    const sizeGb = Number(commitment.size_gb);
+    const committedRoot = String(commitment.merkle_root || '');
+    if (!/^[0-9a-fA-F]{64}$/.test(committedRoot)) return { ok: false, motivo: 'plot has an invalid merkle_root commitment' };
+
+    const storedScoops = safeInt(commitment.total_scoops, 0);
+    const totalScoops = storedScoops > 0 ? storedScoops : plotScoopCount(sizeGb);
+    const capacityCheck = validatePlotCapacity(sizeGb, totalScoops);
+    if (!capacityCheck.ok) return { ok: false, motivo: `invalid registered plot: ${capacityCheck.motivo}` };
+
+    if (!proofPacket || typeof proofPacket.scoop_data !== 'string' || !/^[0-9a-fA-F]{64}$/.test(proofPacket.scoop_data)) {
+      return { ok: false, motivo: 'proof_packet.scoop_data must be exactly 32 bytes of hex' };
+    }
+    if (proofPacket.total_scoops != null) {
+      const packetCapacity = validatePlotCapacity(sizeGb, proofPacket.total_scoops);
+      if (!packetCapacity.ok) return { ok: false, motivo: packetCapacity.motivo };
+      if (packetCapacity.totalScoops !== totalScoops) {
+        return { ok: false, motivo: 'proof total_scoops does not match registered plot' };
+      }
+    }
+
     const genSig = ch.challenge_seed || ZERO_HASH;
     const networkBaseTarget = ch.base_target || chain._baseTargetForHeight(ch.block_height || chain.height);
     const computedDeadline = Math.min(computeDeadline(proofPacket.scoop_data, genSig, networkBaseTarget), maxDl);
     if (computedDeadline !== deadline) return { ok: false, motivo: `PoC verification failed: computed ${computedDeadline}s, submitted ${deadline}s` };
     const expectedDigest = sha256hex(Buffer.concat([Buffer.from(proofPacket.scoop_data, 'hex'), Buffer.from(String(computedDeadline))]));
     if (proofPacket.proof_digest && proofPacket.proof_digest !== expectedDigest) return { ok: false, motivo: 'proof digest mismatch' };
-    const totalScoops = safeInt(proofPacket.total_scoops, 0) || plotScoopCount(sizeGb);
     const scoopIndex = safeInt(proofPacket.scoop_index, -1);
     if (scoopIndex < 0 || scoopIndex >= totalScoops) return { ok: false, motivo: `invalid scoop_index ${scoopIndex} for ${totalScoops} scoops` };
     const expectedTargetIdx = ch.target_scoop_index != null
@@ -103,7 +120,7 @@ class ChallengeManager {
     const insertRes = this.db.prepare('INSERT OR IGNORE INTO challenge_submissions (challenge_id, miner, plot_id, size_gb, deadline, proof_digest, proof_signature, submitted_at) VALUES (?,?,?,?,?,?,?,?)').run(challengeId, miner, plotId, sizeGb, deadline, expectedDigest, proofSig, now);
     if (insertRes.changes > 0 && /^[0-9a-fA-F]{64}$/.test(proofPacket.scoop_data)) {
       this.db.prepare('UPDATE challenge_submissions SET scoop_data = ?, scoop_index = ?, total_scoops = ?, merkle_proof = ?, merkle_root = ? WHERE challenge_id = ? AND miner = ? AND plot_id = ? AND deadline = ?')
-        .run(String(proofPacket.scoop_data), safeInt(proofPacket.scoop_index, 0), safeInt(proofPacket.total_scoops, 0), JSON.stringify(merkleProof || []), String(committedRoot || ''), challengeId, miner, plotId, deadline);
+        .run(String(proofPacket.scoop_data), safeInt(proofPacket.scoop_index, 0), totalScoops, JSON.stringify(merkleProof || []), String(committedRoot || ''), challengeId, miner, plotId, deadline);
     }
     const updated = this.db.prepare('UPDATE mining_challenges SET winner_miner = ?, winner_deadline = ?, winner_plot_id = ?, finalized_at = ? WHERE challenge_id = ? AND (winner_deadline IS NULL OR ? < winner_deadline)').run(miner, deadline, plotId, now, challengeId, deadline);
     const subCount = this.db.prepare('SELECT COUNT(*) as cnt FROM challenge_submissions WHERE challenge_id = ?').get(challengeId).cnt;
