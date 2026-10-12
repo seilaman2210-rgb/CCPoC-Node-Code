@@ -1,8 +1,11 @@
 'use strict';
 
 const crypto = require('crypto');
+const { deriveSampleIndexes } = require('../crypto-utils/crypto');
 
 const PLOT_FORMAT_VERSION = 4;
+const CAPACITY_SAMPLE_COUNT = 16;
+const CAPACITY_SAMPLE_ROUND = 4;
 const PLOT_COMMIT_OPCODE = 1;
 const PLOT_TX_MAGIC = Buffer.from('CCPC', 'ascii');
 const PLOT_TX_MAGIC_HEX = '0x43435043';
@@ -127,6 +130,31 @@ function deriveTargetScoopIndex(challengeId) {
   const digest = sha256(Buffer.concat([CHALLENGE_DOMAIN, Buffer.from(challengeId, 'hex')]));
   // The modulus is 2^13, so the low 13 bits are exactly uniform.
   return digest.readUInt16BE(30) & (SCOOPS_PER_NONCE - 1);
+}
+
+function derivePlotCapacitySampleIndexes(challengeId, totalScoops, plotId, targetIndex) {
+  if (typeof challengeId !== 'string' || !/^[0-9a-f]{64}$/.test(challengeId)) {
+    throw new TypeError('challenge_id must be a canonical 32-byte lowercase hash');
+  }
+  if (!Number.isSafeInteger(totalScoops) || totalScoops <= CAPACITY_SAMPLE_COUNT) {
+    throw new RangeError('total_scoops is too small for v4 capacity sampling');
+  }
+  if (!Number.isSafeInteger(targetIndex) || targetIndex < 0 || targetIndex >= totalScoops) {
+    throw new RangeError('target index is outside the plot');
+  }
+  _hex32(plotId, 'plot_id');
+  const candidates = deriveSampleIndexes(
+    challengeId,
+    totalScoops,
+    CAPACITY_SAMPLE_COUNT + 1,
+    CAPACITY_SAMPLE_ROUND,
+    plotId
+  );
+  const indexes = candidates.filter(index => index !== targetIndex).slice(0, CAPACITY_SAMPLE_COUNT);
+  if (indexes.length !== CAPACITY_SAMPLE_COUNT || new Set(indexes).size !== CAPACITY_SAMPLE_COUNT) {
+    throw new Error('could not derive the canonical unique capacity sample set');
+  }
+  return indexes;
 }
 
 function _chainIdBytes(chainId) {
@@ -281,6 +309,8 @@ class StreamingMerkleAccumulator {
 
 module.exports = {
   PLOT_FORMAT_VERSION,
+  CAPACITY_SAMPLE_COUNT,
+  CAPACITY_SAMPLE_ROUND,
   PLOT_COMMIT_OPCODE,
   PLOT_TX_MAGIC_HEX,
   SCOOP_SIZE,
@@ -294,6 +324,7 @@ module.exports = {
   isPlotCommitmentTxData,
   parsePlotCommitmentTxData,
   deriveTargetScoopIndex,
+  derivePlotCapacitySampleIndexes,
   deriveCanonicalPlotLeaf,
   iterateCanonicalPlotLeaves,
   StreamingMerkleAccumulator,
