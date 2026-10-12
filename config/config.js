@@ -63,7 +63,7 @@ function loadConfig() {
     initialTarget: '0x00FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF',
     initialReward: '1650000000000000000',
     halvingInterval: 6300000,
-    maxSupply: 21000000 * (10 ** 18),
+    maxSupply: '21000000000000000000000000',
     maxMempoolSize: 5000,
     mempoolTxTtlSec: 3600,
     txRelayHops: 6,
@@ -101,6 +101,13 @@ smartContractsEnabled: true,
       if (saved.seedPeers) defaults.seedPeers = normalizeSeedPeers(saved.seedPeers);
       if (saved.nodeUrl) defaults.nodeUrl = normalizeUrl(saved.nodeUrl) || defaults.nodeUrl;
     } catch {}
+  }
+
+  // Older configs serialized the default maxSupply through a JS Number, which
+  // loses integer precision at 21,000,000 * 10^18. Recover the intended exact
+  // default when that legacy numeric value is encountered.
+  if (typeof defaults.maxSupply === 'number' && defaults.maxSupply === 21000000 * (10 ** 18)) {
+    defaults.maxSupply = '21000000000000000000000000';
   }
 
   const envInt = (key, def) => { const v = process.env[key]; return v ? parseInt(v, 10) || def : def; };
