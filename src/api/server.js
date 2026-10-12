@@ -544,9 +544,14 @@ app.get('/api/state', (req, res) => {
       const existingCommitment = this.db.prepare(
         'SELECT merkle_root, size_gb, total_scoops FROM plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)'
       ).get(String(plot_id), normalizedAddress);
-      const existingCheck = validateImmutablePlotCommitment(existingCommitment, candidateCommitment);
-      if (!existingCheck.ok) {
-        return res.status(409).json({ error: existingCheck.motivo, require_new_plot_id: true });
+      const peerCommitments = this.db.prepare(
+        'SELECT merkle_root, size_gb, total_scoops FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)'
+      ).all(String(plot_id), normalizedAddress);
+      for (const pinned of [existingCommitment, ...peerCommitments].filter(Boolean)) {
+        const existingCheck = validateImmutablePlotCommitment(pinned, candidateCommitment);
+        if (!existingCheck.ok) {
+          return res.status(409).json({ error: existingCheck.motivo, require_new_plot_id: true });
+        }
       }
 
       const now = Math.floor(Date.now() / 1000);
