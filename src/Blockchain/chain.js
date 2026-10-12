@@ -482,7 +482,11 @@ class Chain {
           finalized_at: 1,
         };
         if (!challenge.finalized_at || !challenge.winner_miner || safeInt(challenge.winner_deadline, -1) < 0) return { ok: false, motivo: 'challenge has no finalized winner' };
-        const expectedChallengeId = sha256hex(`${String(challenge.challenge_seed || '')}:${String(parent.hash)}`);
+        const expectedChallengeSeed = String(parent.generation_signature || ZERO_HASH);
+        if (String(challenge.challenge_seed || '') !== expectedChallengeSeed) {
+          return { ok: false, motivo: 'challenge seed does not match the parent generation signature' };
+        }
+        const expectedChallengeId = sha256hex(String(challenge.challenge_seed || '') + ':' + String(parent.hash));
         if (String(bloco.challenge_id) !== expectedChallengeId) return { ok: false, motivo: 'challenge is not bound to parent' };
         if (safeInt(challenge.block_height, -1) !== parent.height) return { ok: false, motivo: 'challenge height does not match parent' };
         const wp = bloco.winner_proof;
@@ -540,41 +544,61 @@ class Chain {
         }
         const winnerReward = Array.isArray(bloco.rewards)
           ? bloco.rewards.find(r => r && normalizeAddr(r.miner || '') === wpMiner
-            && String(r.plot_id || '') === wpPlot
+            && String(r.plot_id || '') === wpPlotId
             && safeInt(r.deadline, -1) === wpDeadline)
           : null;
         if (!winnerReward || winnerReward.size_gb == null) {
-          return { ok: false, motivo: 'winner reward must commit the plot size for capacity validation' };
-        }
-        const rewardCapacity = validatePlotCapacity(winnerReward.size_gb, totalScoops);
-        if (!rewardCapacity.ok) {
-          return { ok: false, motivo: `winner_proof capacity mismatch: ${rewardCapacity.motivo}` };
+          return { ok: false, motivo: 'winner reward must match a consensus-anchored plot commitment' };
         }
 
-        const knownPlot = this.db.prepare('SELECT merkle_root, size_gb, total_scoops FROM plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)').get(wpPlotId, wpMiner)
-          || this.db.prepare('SELECT merkle_root, size_gb, total_scoops FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)').get(wpPlotId, wpMiner);
-        if (knownPlot && knownPlot.merkle_root) {
-          if (knownPlot.merkle_root.toLowerCase() !== merkleRootClaim.toLowerCase()) {
-            return { ok: false, motivo: 'winner_proof merkle_root does not match committed plot root' };
-          }
-          if (Number(knownPlot.size_gb) !== rewardCapacity.sizeGb) {
-            return { ok: false, motivo: 'winner reward plot size does not match registered plot' };
-          }
-          const registeredScoops = safeInt(knownPlot.total_scoops, 0) || totalScoops;
-          const registeredCapacity = validatePlotCapacity(knownPlot.size_gb, registeredScoops);
-          if (!registeredCapacity.ok || registeredScoops !== totalScoops) {
-            return { ok: false, motivo: 'winner_proof total_scoops does not match registered plot capacity' };
-          }
-        } else {
-          log('debug', `addBlock #${height}: plot ${wpPlotId.slice(0, 12)}… sem commitment local, validação autónoma`);
+        // Consensus truth comes from a signed registration transaction in the
+        // parent chain, not from this node's local plot cache or peer database.
+        // Require one full block of maturity so the parent-block producer
+        // cannot register a challenge-targeted root in the parent itself.
+        const plotCommitment = this.getPlotCommitment(wpPlotId, parent.hash, parent.height - 1);
+        if (!plotCommitment) {
+          return { ok: false, motivo: 'winner plot has no mature on-chain plot commitment' };
         }
-        const expectedTargetIdx = challenge.target_scoop_index != null
-          ? safeInt(challenge.target_scoop_index, -1)
-          : parseInt(sha256hex(String(challenge.challenge_seed || '')).slice(0, 8), 16) % MINING_SCOOP_MODULUS;
-        if (scoopIndex % MINING_SCOOP_MODULUS !== expectedTargetIdx) {
-          return { ok: false, motivo: `winner_proof scoop_index ${scoopIndex} is not the selected leaf slot (expected index % ${MINING_SCOOP_MODULUS} == ${expectedTargetIdx})` };
+        if (normalizeAddr(plotCommitment.miner) !== wpMiner) {
+          return { ok: false, motivo: 'winner proof miner does not own the committed plot_id' };
         }
+        if (safeInt(plotCommitment.format_version, 0) !== PLOT_FORMAT_VERSION) {
+          return { ok: false, motivo: 'winner plot uses an unsupported plot format' };
+        }
+        if (String(plotCommitment.merkle_root || '').toLowerCase() !== merkleRootClaim.toLowerCase()) {
+          return { ok: false, motivo: 'winner_proof merkle_root does not match the on-chain plot commitment' };
+        }
+        if (safeInt(plotCommitment.total_scoops, 0) !== totalScoops) {
+          return { ok: false, motivo: 'winner_proof total_scoops does not match the on-chain plot commitment' };
+        }
+        if (Number(winnerReward.size_gb) !== Number(plotCommitment.size_gb)) {
+          return { ok: false, motivo: 'winner reward size_gb does not match the on-chain plot commitment' };
+        }
+
+        const expectedTargetIdx = deriveTargetScoopIndex(bloco.challenge_id);
+        if (challenge.target_scoop_index != null && safeInt(challenge.target_scoop_index, -1) !== expectedTargetIdx) {
+          return { ok: false, motivo: 'stored challenge target does not match the parent-bound v4 target' };
+        }
+        if (scoopIndex % V4_SCOOPS_PER_NONCE !== expectedTargetIdx) {
+          return { ok: false, motivo: 'winner_proof scoop_index does not match the parent-bound v4 target slot' };
+        }
+
         const leafHash = Buffer.from(scoopData, 'hex');
+        let canonicalLeaf;
+        try {
+          canonicalLeaf = deriveCanonicalPlotLeaf({
+            chain_id: String(bloco.chain_id || this.cfg.chainId || '0'),
+            miner: wpMiner,
+            plot_id: wpPlotId,
+            nonce_index: Math.floor(scoopIndex / V4_SCOOPS_PER_NONCE),
+            scoop_index: scoopIndex % V4_SCOOPS_PER_NONCE,
+          });
+        } catch (e) {
+          return { ok: false, motivo: 'invalid canonical v4 plot coordinates: ' + e.message };
+        }
+        if (!canonicalLeaf.equals(leafHash)) {
+          return { ok: false, motivo: 'winner scoop is not the canonical v4 leaf for this miner, plot, nonce and challenge slot' };
+        }
         if (!verifyMerkleProofBuf(leafHash, scoopIndex, totalScoops, merkleProof, merkleRootClaim)) {
           return { ok: false, motivo: 'winner_proof merkle proof does not match committed plot root' };
         }
