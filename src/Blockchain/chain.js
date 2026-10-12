@@ -6,6 +6,7 @@ const { SnapSyncService } = require('../snap/snap-service');
 const { hashBlockAsync, verifySignatureAsync } = require('../utils/worker-pool');
 const { estimateIntrinsicGas, nextBaseFee, GAS_PARAMS, capTxGasLimit, minimumFee } = require('../consensus/gas');
 const { validatePlotCapacity } = require('../crypto-utils/plot-capacity');
+const { calculateEmissionThroughHeight } = require('../consensus/issuance');
 const { isWithinRatio } = require('../consensus/base-target-validation');
 const { log } = require('../../config/config');
 const { createBlock } = require('@ethereumjs/block');
@@ -138,8 +139,13 @@ class Chain {
     const totalReward = calculateMiningReward(bloco.height, this.cfg);
     const maxSupply = safeBigInt(this.cfg.maxSupply, 0n);
     if (maxSupply > 0n) {
-      const emitted = this.db.prepare('SELECT reward_units FROM blocks WHERE height > 0').all().reduce((sum, row) => sum + safeBigInt(row.reward_units, 0n), 0n);
-      if (safeBigInt(emitted, 0n) + totalReward > maxSupply) return { ok: false, motivo: 'max supply exceeded' };
+      let emitted;
+      try {
+        emitted = calculateEmissionThroughHeight(safeInt(bloco.height, 0) - 1, this.cfg);
+      } catch (e) {
+        return { ok: false, motivo: `invalid emission configuration: ${e.message}` };
+      }
+      if (emitted + totalReward > maxSupply) return { ok: false, motivo: 'max supply exceeded' };
     }
     let subKeys = null;
     if (bloco.challenge_id) {
