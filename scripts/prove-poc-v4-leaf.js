@@ -18,6 +18,8 @@ const {
   ZERO_ADDRESS,
   deriveCanonicalPlotLeaf,
   deriveTargetScoopIndex,
+  derivePlotCapacitySampleIndexes,
+  CAPACITY_SAMPLE_COUNT,
 } = require('../src/consensus/poc-plot-v4');
 
 function readExactSync(fd, buffer, position) {
@@ -27,6 +29,36 @@ function readExactSync(fd, buffer, position) {
     if (read <= 0) throw new Error('unexpected end of plot/Merkle index file');
     offset += read;
   }
+}
+
+function readLeafAndProof(index, totalScoops, plotFd, treeFd, levels) {
+  const leaf = Buffer.alloc(SCOOP_SIZE);
+  readExactSync(plotFd, leaf, index * SCOOP_SIZE);
+  const merkleProof = [];
+  let currentIndex = index;
+  let count = totalScoops;
+  let layer = 0;
+  while (count > 1) {
+    const oddLast = count % 2 === 1 && currentIndex === count - 1;
+    if (!oddLast) {
+      const siblingIndex = currentIndex ^ 1;
+      const sibling = Buffer.alloc(SCOOP_SIZE);
+      if (layer === 0) {
+        readExactSync(plotFd, sibling, siblingIndex * SCOOP_SIZE);
+      } else {
+        const treeLevel = levels[layer - 1];
+        if (!treeLevel || Number(treeLevel.count) !== count) {
+          throw new Error('Merkle index metadata has inconsistent level counts');
+        }
+        readExactSync(treeFd, sibling, Number(treeLevel.offset_bytes) + siblingIndex * SCOOP_SIZE);
+      }
+      merkleProof.push(sibling.toString('hex'));
+    }
+    currentIndex = Math.floor(currentIndex / 2);
+    count = Math.ceil(count / 2);
+    layer++;
+  }
+  return { leaf, merkleProof };
 }
 
 function main() {
@@ -70,51 +102,55 @@ function main() {
 
   const plotFd = fs.openSync(plotPath, 'r');
   const treeFd = fs.openSync(treePath, 'r');
-  let merkleProof = [];
   let leaf;
+  let merkleProof;
+  let capacitySamples;
   try {
-    leaf = Buffer.alloc(SCOOP_SIZE);
-    readExactSync(plotFd, leaf, scoopIndex * SCOOP_SIZE);
+    const targetProof = readLeafAndProof(scoopIndex, totalScoops, plotFd, treeFd, metadata.merkle_index_levels);
+    leaf = targetProof.leaf;
+    merkleProof = targetProof.merkleProof;
 
-    let index = scoopIndex;
-    let count = totalScoops;
-    let layer = 0;
-    while (count > 1) {
-      const oddLast = count % 2 === 1 && index === count - 1;
-      if (!oddLast) {
-        const siblingIndex = index ^ 1;
-        const sibling = Buffer.alloc(SCOOP_SIZE);
-        if (layer === 0) {
-          readExactSync(plotFd, sibling, siblingIndex * SCOOP_SIZE);
-        } else {
-          const treeLevel = metadata.merkle_index_levels[layer - 1];
-          if (!treeLevel || Number(treeLevel.count) !== count) {
-            throw new Error('Merkle index metadata has inconsistent level counts');
-          }
-          readExactSync(treeFd, sibling, Number(treeLevel.offset_bytes) + siblingIndex * SCOOP_SIZE);
-        }
-        merkleProof.push(sibling.toString('hex'));
-      }
-      index = Math.floor(index / 2);
-      count = Math.ceil(count / 2);
-      layer++;
+    const canonicalLeaf = deriveCanonicalPlotLeaf({
+      chain_id: String(metadata.chain_id),
+      miner: String(metadata.miner).toLowerCase(),
+      plot_id: String(metadata.plot_id),
+      nonce_index: Math.floor(scoopIndex / SCOOPS_PER_NONCE),
+      scoop_index: scoopIndex % SCOOPS_PER_NONCE,
+    });
+    if (!canonicalLeaf.equals(leaf)) throw new Error('selected stored leaf does not match canonical v4 generation');
+    if (!verifyMerkleProofBuf(leaf, scoopIndex, totalScoops, merkleProof, metadata.merkle_root)) {
+      throw new Error('generated Merkle proof does not match the on-chain root');
     }
+
+    const sampleIndexes = derivePlotCapacitySampleIndexes(challengeId, totalScoops, metadata.plot_id, scoopIndex);
+    capacitySamples = sampleIndexes.map(sampleIndex => {
+      const sampleProof = readLeafAndProof(sampleIndex, totalScoops, plotFd, treeFd, metadata.merkle_index_levels);
+      const canonicalSample = deriveCanonicalPlotLeaf({
+        chain_id: String(metadata.chain_id),
+        miner: String(metadata.miner).toLowerCase(),
+        plot_id: String(metadata.plot_id),
+        nonce_index: Math.floor(sampleIndex / SCOOPS_PER_NONCE),
+        scoop_index: sampleIndex % SCOOPS_PER_NONCE,
+      });
+      if (!canonicalSample.equals(sampleProof.leaf)) {
+        throw new Error('capacity sample at index ' + sampleIndex + ' is not canonical');
+      }
+      if (!verifyMerkleProofBuf(sampleProof.leaf, sampleIndex, totalScoops, sampleProof.merkleProof, metadata.merkle_root)) {
+        throw new Error('capacity sample at index ' + sampleIndex + ' does not match the committed Merkle root');
+      }
+      return {
+        scoop_index: sampleIndex,
+        scoop_data: sampleProof.leaf.toString('hex'),
+        merkle_proof: sampleProof.merkleProof,
+      };
+    });
   } finally {
     fs.closeSync(plotFd);
     fs.closeSync(treeFd);
   }
 
-  const leafHex = leaf.toString('hex');
-  const canonicalLeaf = deriveCanonicalPlotLeaf({
-    chain_id: String(metadata.chain_id),
-    miner: String(metadata.miner).toLowerCase(),
-    plot_id: String(metadata.plot_id),
-    nonce_index: Math.floor(scoopIndex / SCOOPS_PER_NONCE),
-    scoop_index: scoopIndex % SCOOPS_PER_NONCE,
-  });
-  if (!canonicalLeaf.equals(leaf)) throw new Error('selected stored leaf does not match canonical v4 generation');
-  if (!verifyMerkleProofBuf(leaf, scoopIndex, totalScoops, merkleProof, metadata.merkle_root)) {
-    throw new Error('generated Merkle proof does not match the on-chain root');
+  if (!Array.isArray(capacitySamples) || capacitySamples.length !== CAPACITY_SAMPLE_COUNT) {
+    throw new Error('failed to construct all canonical capacity samples');
   }
 
   const deadline = computeDeadline(leafHex, challengeSeed, baseTarget);
@@ -140,6 +176,7 @@ function main() {
     scoop_index: scoopIndex,
     scoop_data: leafHex,
     merkle_proof: merkleProof,
+    capacity_samples: capacitySamples,
     deadline,
     proof_digest: sha256hex(Buffer.concat([leaf, Buffer.from(String(deadline))])),
     proof_signature: signature,
