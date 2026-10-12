@@ -4,13 +4,15 @@
 
 This branch is an experimental review branch, not a production-ready consensus release. It contains targeted hardening changes from a static inspection of the JavaScript node. The previous PR #10 was closed without merging; this branch has not been submitted as a new PR.
 
-No full node integration test, multi-node test, live-chain replay, dependency install, or formal cryptographic audit has been completed in this environment. The pure helper tests were exercised in isolation; those results do not prove that the complete node builds or that the new rules are backward-compatible.
+A dependency-backed GitHub Actions run installs the lockfile, runs `node --check` across the JavaScript files, and executes the repository's Node test suite. These tests do not constitute a full multi-node consensus test, a live-chain replay, or a formal cryptographic audit, and do not prove backward compatibility.
 
 ## Changes in this branch
 
 - Replace truncating BigInt division in base-target drift checks with exact multiplicative comparisons.
 - Validate plot size and total-scoop metadata consistently in plot announcements, registration, proof submission, and block winner proofs.
 - Align the mining target modulus with the declared 8,192 32-byte leaves per nonce to avoid two eligible leaf slots per nonce in the CCPoC layout.
+- Make plot registration idempotent and prevent the public registration endpoint from replacing an existing `(plot_id, miner)` root or capacity; peer plot caches now reject conflicting re-announcements rather than overwriting their first stored commitment.
+- Fix `deriveSampleIndexes`, whose former base-10 parsing of hexadecimal hashes was biased, by using bounded rejection sampling and a unique-subset algorithm; add input bounds to avoid accidental unbounded work.
 - Make Merkle proof verification reject invalid indices, malformed 32-byte hashes, missing siblings, extra siblings, and non-canonical path lengths.
 - Compute cumulative scheduled issuance with BigInt arithmetic, and normalize the default maximum supply to an exact decimal string.
 - Derive selected non-hashed block metadata locally rather than trusting peer-provided values for them.
@@ -19,13 +21,15 @@ No full node integration test, multi-node test, live-chain replay, dependency in
 
 ## Validation completed
 
-A GitHub Actions run on this branch successfully installed the locked dependencies, ran `node --check` across the JavaScript files, and ran the actual repository's `npm test` command. The latest completed run reported **20 tests passed and 0 failed**:
+A GitHub Actions run on this branch successfully installed the locked dependencies, ran `node --check` across the JavaScript files, and ran the actual repository's `npm test` command. The latest completed run reported **31 tests passed and 0 failed**:
 - Base-target ratio checks: boundary cases, over-limit ratios in both directions, malformed values.
 - Plot metadata checks: canonical counts, mismatches, invalid sizes, unsafe values, non-canonical encodings.
 - Plot-capacity integration checks against the canonical 1 GiB scoop count.
 - Merkle checks: valid two-leaf proof, missing/extra/malformed siblings, odd-sized tree duplicate-last convention, invalid indices.
 - Emission checks: block-height boundaries, halving schedule, and a deterministic grid comparing cumulative emission against the per-height reward function.
 - PoC layout checks: 32-byte leaf size, 8,192 entries per nonce, 1 GiB capacity arithmetic, and one eligible slot per complete nonce.
+- Plot commitment immutability checks: idempotent registration, root/size/count replacement rejection, and legacy rootless rows.
+- Sample-index helper checks: determinism, uniqueness, bounds, full permutations, zero samples, invalid input handling, and oversized-sample rejection.
 
 This is meaningful unit/syntax validation, but it is **not** an integration test of a running node, multi-node consensus test, replay of a real database, or formal cryptographic audit.
 
@@ -35,7 +39,7 @@ The current PoC layout declares 8,192 32-byte leaves per nonce, but the previous
 
 This adjustment is a **consensus change**, not a drop-in production patch. It is not Burst byte-compatible: CCPoC currently treats each leaf as 32 bytes, whereas Signum/Burst scoops are 64 bytes (two 32-byte hashes) within 4,096 scoops per nonce. The new setting makes the CCPoC internal layout consistent with its own 8,192-leaf nonce, but all miners and validating nodes must activate the same version at a coordinated height.
 
-More fundamentally, a Merkle root commits to data but does not prove that the prover physically stores a plot of the claimed size. A prover can choose arbitrary leaf contents, build a root, and announce the advertised leaf count; the verifier currently validates inclusion without recomputing each leaf from a canonical plot-generation algorithm. Registration is also local database/API state rather than a required consensus-anchored plot-commitment transaction, so a block received by a node that does not know the registration can be validated using the proof packet alone. These are the unresolved fake-capacity risks.
+More fundamentally, a Merkle root commits to data but does not prove that the prover physically stores a plot of the claimed size. A prover can choose arbitrary leaf contents, build a root, and announce the advertised leaf count; the verifier currently validates inclusion without recomputing each leaf from a canonical plot-generation algorithm. Registration is still local database/API state rather than a required consensus-anchored plot-commitment transaction, so a block received by a node that does not know the registration can be validated using the proof packet alone. This branch reduces local root rotation by making the registration endpoint and peer caches reject conflicting updates for an existing plot ID, but first-seen cache state is not a globally agreed, challenge-time commitment. These are the unresolved fake-capacity risks.
 
 To establish meaningful storage-hardness, a protocol upgrade must:
 1. Specify a canonical plot-generation algorithm, leaf/scoop format, nonce layout, and commitment format.
