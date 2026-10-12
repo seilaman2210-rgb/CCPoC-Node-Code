@@ -134,13 +134,13 @@ class SyncEngine {
           const pinnedLocal = this.db.prepare(
             'SELECT merkle_root, size_gb, total_scoops FROM plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)'
           ).get(pid, m);
-          const pinnedPeer = this.db.prepare(
-            'SELECT merkle_root, size_gb, total_scoops FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?) LIMIT 1'
-          ).get(pid, m);
-          const pinned = pinnedLocal || pinnedPeer;
-          const immutable = validateImmutablePlotCommitment(pinned, norm);
-          if (!immutable.ok) {
-            log('warn', `[P2P] Ignoring conflicting plot commitment ${pid.slice(0, 12)}… from ${base}: ${immutable.motivo}`);
+          const pinnedPeers = this.db.prepare(
+            'SELECT merkle_root, size_gb, total_scoops FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)'
+          ).all(pid, m);
+          const pinned = [pinnedLocal, ...pinnedPeers].filter(Boolean);
+          const conflict = pinned.map(item => validateImmutablePlotCommitment(item, norm)).find(result => !result.ok);
+          if (conflict) {
+            log('warn', `[P2P] Ignoring conflicting plot commitment ${pid.slice(0, 12)}… from ${base}: ${conflict.motivo}`);
             continue;
           }
           this.db.prepare('INSERT OR IGNORE INTO peer_plot_commitments (plot_id, miner, merkle_root, size_gb, total_scoops, node_url, vrf_public_key, vrf_output, vrf_proof, signature, public_key, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
@@ -177,12 +177,13 @@ class SyncEngine {
         const pinnedLocal = this.db.prepare(
           'SELECT merkle_root, size_gb, total_scoops FROM plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)'
         ).get(plotId, miner);
-        const pinnedPeer = this.db.prepare(
-          'SELECT merkle_root, size_gb, total_scoops FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?) LIMIT 1'
-        ).get(plotId, miner);
-        const immutable = validateImmutablePlotCommitment(pinnedLocal || pinnedPeer, candidate);
-        if (!immutable.ok) {
-          log('warn', `[P2P] Ignoring conflicting plot commitment ${plotId.slice(0, 12)}… from ${originUrl}: ${immutable.motivo}`);
+        const pinnedPeers = this.db.prepare(
+          'SELECT merkle_root, size_gb, total_scoops FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)'
+        ).all(plotId, miner);
+        const pinned = [pinnedLocal, ...pinnedPeers].filter(Boolean);
+        const conflict = pinned.map(item => validateImmutablePlotCommitment(item, candidate)).find(result => !result.ok);
+        if (conflict) {
+          log('warn', `[P2P] Ignoring conflicting plot commitment ${plotId.slice(0, 12)}… from ${originUrl}: ${conflict.motivo}`);
           continue;
         }
         this.db.prepare(`INSERT OR IGNORE INTO peer_plot_commitments
