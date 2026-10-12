@@ -82,7 +82,8 @@ function initDB(dbPath, cfg) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       challenge_id TEXT, miner TEXT, plot_id TEXT, size_gb REAL,
       deadline INTEGER, proof_digest TEXT, submitted_at INTEGER,
-      public_key TEXT DEFAULT ''
+      public_key TEXT DEFAULT '',
+      capacity_samples TEXT DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_sub_challenge ON challenge_submissions(challenge_id);
     CREATE UNIQUE INDEX IF NOT EXISTS ux_sub_challenge_plot ON challenge_submissions(challenge_id, miner, plot_id, deadline);
@@ -213,6 +214,7 @@ function initDB(dbPath, cfg) {
   try { db.prepare('ALTER TABLE challenge_submissions ADD COLUMN merkle_proof TEXT DEFAULT ""').run(); } catch {}
   try { db.prepare('ALTER TABLE challenge_submissions ADD COLUMN merkle_root TEXT DEFAULT ""').run(); } catch {}
   try { db.prepare('ALTER TABLE challenge_submissions ADD COLUMN public_key TEXT DEFAULT ""').run(); } catch {}
+  try { db.prepare('ALTER TABLE challenge_submissions ADD COLUMN capacity_samples TEXT DEFAULT ""').run(); } catch {}
 
   try {
     db.prepare('DELETE FROM challenge_submissions WHERE id NOT IN (SELECT MIN(id) FROM challenge_submissions GROUP BY challenge_id, miner, plot_id, deadline)').run();
