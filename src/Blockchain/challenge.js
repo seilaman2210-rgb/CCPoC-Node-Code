@@ -2,6 +2,10 @@ const crypto = require('crypto');
 const { ZERO_HASH, sha256hex, sha256buf, safeInt, safeBigInt, hashBlock, hashTransaction, merkleRoot, computeStateRootAfterTxs, calculateMiningReward, verifyMerkleProofBuf, computeDeadline, plotScoopCount, SCOOPS_PER_NONCE, MINING_SCOOP_MODULUS, verifySignature, canonicalTxMessage, proofMessage, recoverTransactionSender } = require('../crypto-utils/crypto');
 const { log } = require('../../config/config');
 const { validatePlotCapacity } = require('../crypto-utils/plot-capacity');
+const {
+  deriveTargetScoopIndex,
+  deriveCanonicalPlotLeaf,
+} = require('../consensus/poc-plot-v4');
 
 
 class ChallengeManager {
@@ -18,8 +22,14 @@ class ChallengeManager {
     const tip = this.chain.getBlock(this.chain.height);
     const genSig = (tip && tip.generation_signature) || ZERO_HASH;
     const tipHash = tip ? tip.hash : ZERO_HASH;
-    const challengeId = sha256hex(`${genSig}:${tipHash}`);
-    const targetIdx = parseInt(sha256hex(genSig).slice(0, 8), 16) % MINING_SCOOP_MODULUS;
+    const challengeId = sha256hex(String(genSig) + ':' + String(tipHash));
+    const targetIdx = deriveTargetScoopIndex(challengeId);
+    // Existing local challenge rows can survive a software update. Normalize
+    // their cached target to the v4 rule; block consensus recomputes it again.
+    try {
+      this.db.prepare('UPDATE mining_challenges SET target_scoop_index = ? WHERE challenge_id = ? AND target_scoop_index != ?')
+        .run(targetIdx, challengeId, targetIdx);
+    } catch {}
     const challengeGrace = Math.max(15, Math.floor((this.cfg.expectedTimePerBlock || 60) / 2));
     const challengeExpiredGraceSec = Math.max(this.cfg.challengeExpiredGraceSec || 300, (this.cfg.expectedTimePerBlock || 60) * 2);
     const baseTarget = this.chain._baseTargetForHeight(this.chain.height);
@@ -65,18 +75,27 @@ class ChallengeManager {
     const maxDl = chain.computeMaxDeadline();
     deadline = safeInt(deadline, -1);
     if (deadline < 0 || deadline > maxDl) return { ok: false, motivo: `invalid deadline (must be 0–${maxDl}s)` };
-    const plot = this.db.prepare('SELECT * FROM plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)').get(plotId, miner);
-    const peerPlot = this.db.prepare('SELECT * FROM peer_plot_commitments WHERE plot_id = ? AND lower(miner) = lower(?)').get(plotId, miner);
-    const commitment = plot || peerPlot;
-    if (!commitment) return { ok: false, motivo: 'plot commitment not found' };
+    const parent = this.chain.getBlock(this.chain.height);
+    if (!parent || sha256hex(String(ch.challenge_seed || '') + ':' + String(parent.hash)) !== String(challengeId)) {
+      return { ok: false, motivo: 'stale challenge: its parent is no longer the active chain tip' };
+    }
+    const commitment = chain.getPlotCommitment(plotId, parent.hash, parent.height - 1);
+    if (!commitment) return { ok: false, motivo: 'plot has no mature on-chain commitment' };
+    if (String(commitment.miner || '').toLowerCase() !== String(miner || '').toLowerCase()) {
+      return { ok: false, motivo: 'plot commitment owner does not match miner' };
+    }
+    if (safeInt(commitment.format_version, 0) !== 4) return { ok: false, motivo: 'unsupported plot format; expected v4' };
     const sizeGb = Number(commitment.size_gb);
     const committedRoot = String(commitment.merkle_root || '');
-    if (!/^[0-9a-fA-F]{64}$/.test(committedRoot)) return { ok: false, motivo: 'plot has an invalid merkle_root commitment' };
+    if (!/^[0-9a-f]{64}$/.test(committedRoot)) return { ok: false, motivo: 'on-chain plot commitment has an invalid merkle root' };
 
-    const storedScoops = safeInt(commitment.total_scoops, 0);
-    const totalScoops = storedScoops > 0 ? storedScoops : plotScoopCount(sizeGb);
+    const totalScoops = safeInt(commitment.total_scoops, 0);
     const capacityCheck = validatePlotCapacity(sizeGb, totalScoops);
-    if (!capacityCheck.ok) return { ok: false, motivo: `invalid registered plot: ${capacityCheck.motivo}` };
+    if (!capacityCheck.ok) return { ok: false, motivo: 'invalid on-chain plot: ' + capacityCheck.motivo };
+    if (proofPacket && proofPacket.merkle_root != null
+        && String(proofPacket.merkle_root).toLowerCase() !== committedRoot) {
+      return { ok: false, motivo: 'proof merkle_root does not match the on-chain commitment' };
+    }
 
     if (!proofPacket || typeof proofPacket.scoop_data !== 'string' || !/^[0-9a-fA-F]{64}$/.test(proofPacket.scoop_data)) {
       return { ok: false, motivo: 'proof_packet.scoop_data must be exactly 32 bytes of hex' };
@@ -97,15 +116,29 @@ class ChallengeManager {
     if (proofPacket.proof_digest && proofPacket.proof_digest !== expectedDigest) return { ok: false, motivo: 'proof digest mismatch' };
     const scoopIndex = safeInt(proofPacket.scoop_index, -1);
     if (scoopIndex < 0 || scoopIndex >= totalScoops) return { ok: false, motivo: `invalid scoop_index ${scoopIndex} for ${totalScoops} scoops` };
-    const expectedTargetIdx = ch.target_scoop_index != null
-      ? safeInt(ch.target_scoop_index, -1)
-      : parseInt(sha256hex(genSig).slice(0, 8), 16) % MINING_SCOOP_MODULUS;
-    if (scoopIndex % MINING_SCOOP_MODULUS !== expectedTargetIdx) {
-      return { ok: false, motivo: `scoop_index ${scoopIndex} is not the challenge target scoop (expected mod ${MINING_SCOOP_MODULUS} == ${expectedTargetIdx})` };
+    const expectedTargetIdx = deriveTargetScoopIndex(challengeId);
+    if (ch.target_scoop_index != null && safeInt(ch.target_scoop_index, -1) !== expectedTargetIdx) {
+      return { ok: false, motivo: 'challenge target does not match the parent-bound v4 target' };
     }
-    const merkleProof = proofPacket.merkle_proof || [];
+    if (scoopIndex % MINING_SCOOP_MODULUS !== expectedTargetIdx) {
+      return { ok: false, motivo: 'scoop_index does not match the parent-bound v4 target slot' };
+    }
+    let canonicalLeaf;
+    try {
+      canonicalLeaf = deriveCanonicalPlotLeaf({
+        chain_id: String(chain.cfg.chainId == null ? '0' : chain.cfg.chainId),
+        miner: String(miner).toLowerCase(),
+        plot_id: String(plotId),
+        nonce_index: Math.floor(scoopIndex / MINING_SCOOP_MODULUS),
+        scoop_index: scoopIndex % MINING_SCOOP_MODULUS,
+      });
+    } catch (e) {
+      return { ok: false, motivo: 'invalid canonical v4 plot coordinates: ' + e.message };
+    }
     const leafHash = Buffer.from(proofPacket.scoop_data, 'hex');
-    if (!verifyMerkleProofBuf(leafHash, scoopIndex, totalScoops, merkleProof, committedRoot)) return { ok: false, motivo: 'Merkle proof does not match committed plot root' };
+    if (!canonicalLeaf.equals(leafHash)) return { ok: false, motivo: 'scoop_data is not the canonical v4 plot leaf' };
+    const merkleProof = proofPacket.merkle_proof || [];
+    if (!verifyMerkleProofBuf(leafHash, scoopIndex, totalScoops, merkleProof, committedRoot)) return { ok: false, motivo: 'Merkle proof does not match on-chain plot root' };
 
     const proofSig = (proofPacket && proofPacket.proof_signature) || '';
     if (!proofSig) return { ok: false, motivo: 'proof_signature required' };
