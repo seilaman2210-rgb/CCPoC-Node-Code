@@ -746,8 +746,11 @@ function isBetterChainCandidate(candidate, incumbent) {
 }
 
 const SCOOP_SIZE = 32;
+// A nonce contains 8192 32-byte plot leaves in this CCPoC format.
+// The challenge must select one leaf slot per nonce; using 4096 here
+// accidentally made two different leaves per nonce eligible.
 const SCOOPS_PER_NONCE = 8192;
-const MINING_SCOOP_MODULUS = 4096;
+const MINING_SCOOP_MODULUS = SCOOPS_PER_NONCE;
 const PLOT_FORMAT_V3 = 3;
 
 function merkleTreeInternalNodeCount(N) {
