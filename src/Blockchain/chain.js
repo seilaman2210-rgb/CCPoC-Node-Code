@@ -666,6 +666,7 @@ class Chain {
         if (doomed) this._rollbackRewardsForBlock(doomed.hash);
         if (doomed) this._rollbackPayoutsForBlock(doomed.hash);
         this.db.prepare('DELETE FROM contract_logs WHERE block_hash = ?').run(existingAtHeight.hash);
+        this.db.prepare('DELETE FROM plot_commitment_events WHERE block_hash = ?').run(existingAtHeight.hash);
         this.db.prepare('DELETE FROM transactions WHERE block_hash = ?').run(existingAtHeight.hash);
         this.db.prepare('DELETE FROM blocks WHERE hash = ?').run(existingAtHeight.hash);
         log('debug', `addBlock forceSync: replaced incumbent ${existingAtHeight.hash.slice(0, 10)} at h=${height}`);
@@ -1257,6 +1258,7 @@ class Chain {
           }
           this._rollbackPayoutsForBlock(r.hash);
           this.db.prepare('DELETE FROM contract_logs WHERE block_hash = ?').run(r.hash);
+          this.db.prepare('DELETE FROM plot_commitment_events WHERE block_hash = ?').run(r.hash);
           this.db.prepare('DELETE FROM blocks WHERE hash = ?').run(r.hash);
           purged++;
         }
@@ -1524,6 +1526,26 @@ class MemPool_Manager {
     const recovered = recoverTransactionSender(tx);
     if (!recovered) return { ok: false, motivo: `invalid signature from ${sender}` };
     if (recovered !== sender.toLowerCase()) return { ok: false, motivo: `recovered sender ${recovered} does not match from_addr` };
+    if (this.chain._isPlotCommitmentTx(tx)) {
+      const commitmentCheck = this.chain._validatePlotCommitmentTxs(
+        [tx],
+        this.chain.bestHash,
+        this.chain.height + 1
+      );
+      if (!commitmentCheck.ok) return { ok: false, motivo: commitmentCheck.motivo };
+      const pendingPlotId = commitmentCheck.commitments[0].plot_id;
+      const pendingRows = this.db.prepare('SELECT raw FROM mempool').all();
+      for (const row of pendingRows) {
+        try {
+          const pending = JSON.parse(row.raw);
+          if (!this.chain._isPlotCommitmentTx(pending)) continue;
+          const decoded = parsePlotCommitmentTxData(pending.data);
+          if (decoded.ok && decoded.commitment.plot_id === pendingPlotId) {
+            return { ok: false, motivo: 'plot_id already has a pending commitment transaction' };
+          }
+        } catch {}
+      }
+    }
     const user = this.db.prepare('SELECT balance, nonce FROM users WHERE lower(address) = lower(?)').get(sender);
     const curNonce = user ? safeInt(user.nonce, 0) : 0;
     const curBalance = user ? safeBigInt(user.balance, 0n) : 0n;
@@ -1587,6 +1609,7 @@ class contracts_Manager {
 
   _isContractCall(tx) {
     if (!tx || !tx.to_addr || !tx.data) return false;
+    if (this.chain._isPlotCommitmentTx(tx)) return false;
     if (!this.chain.contracts) return false;
     return !!this.db.prepare('SELECT 1 FROM smart_contracts WHERE lower(address) = lower(?)').get(tx.to_addr);
   }
