@@ -1,0 +1,73 @@
+# CCPoC Node — deeper static security review
+
+## Status and scope
+
+This branch is an experimental review branch, not a production-ready consensus release. It contains targeted hardening changes from a static inspection of the JavaScript node. The previous PR #10 was closed without merging; this branch has not been submitted as a new PR.
+
+No full node integration test, multi-node test, live-chain replay, dependency install, or formal cryptographic audit has been completed in this environment. The pure helper tests were exercised in isolation; those results do not prove that the complete node builds or that the new rules are backward-compatible.
+
+## Changes in this branch
+
+- Replace truncating BigInt division in base-target drift checks with exact multiplicative comparisons.
+- Validate plot size and total-scoop metadata consistently in plot announcements, registration, proof submission, and block winner proofs.
+- Make Merkle proof verification reject invalid indices, malformed 32-byte hashes, missing siblings, extra siblings, and non-canonical path lengths.
+- Compute cumulative scheduled issuance with BigInt arithmetic, and normalize the default maximum supply to an exact decimal string.
+- Derive selected non-hashed block metadata locally rather than trusting peer-provided values for them.
+- Revert EVM state checkpoints after failed execution, restore per-transaction contract snapshots on recognized reverts, avoid crediting a successful contract call's value twice, and avoid debiting the transferred value for a reverted contract transaction.
+- Add Node's built-in tests for the new pure helpers.
+
+## Validation completed
+
+The helper logic was copied into an isolated local harness and tested with Node's built-in test runner:
+- Base-target ratio checks: boundary cases, over-limit ratios in both directions, malformed values.
+- Plot metadata checks: canonical counts, mismatches, invalid sizes, unsafe values, non-canonical encodings.
+- Merkle checks: valid two-leaf proof, missing/extra/malformed siblings, odd-sized tree duplicate-last convention, invalid indices.
+- Emission checks: block-height boundaries and halving schedule.
+
+The isolated harness reported 14 passing tests and zero failures. An exhaustive small-range property check of cumulative emission against per-height scheduled rewards also passed. These tests do not run the actual node with its dependencies and must not be described as full repository CI.
+
+## Critical unresolved protocol issue: current PoC does not prove physical storage capacity
+
+The existing challenge is represented by a target scoop index modulo MINING_SCOOP_MODULUS, and verifiers accept a scoop when scoop_index % MINING_SCOOP_MODULUS equals that target. This lets a prover choose any congruent index rather than proving that a deterministically sampled index across the entire declared plot was selected. More fundamentally, a Merkle root commits to data but does not prove that the prover physically stores a plot of the claimed size. A prover can potentially construct a compact/fake tree whose leaf count matches the advertised plot size without storing the claimed data.
+
+The metadata changes in this branch only ensure internal consistency between size, leaf count, and the proof tree. They **do not establish a sound Proof-of-Capacity protocol**, and the branch must not be treated as having solved plot grinding or fake-capacity attacks.
+
+A real fix requires a versioned consensus/protocol change coordinated with miner/plot-generator software:
+1. Specify a canonical plot-generation algorithm and commitment format.
+2. Derive a full leaf index deterministically from the challenge and plot identity, rather than accepting any index in a modulo class.
+3. Define how the registered plot commitment is anchored before the challenge (e.g. in consensus-validated chain state), including deterministic validation of registration signatures and update rules.
+4. Define canonical size/count arithmetic, odd-tree semantics, and a protocol activation height/version.
+5. Add independent reference vectors and adversarial tests for fake plots, replay, duplicate leaves, invalid commitments, and differing node databases.
+
+The miner/plot-generation implementation is not present in this repository, so end-to-end interoperability cannot be checked here.
+
+## Other important unresolved issues
+
+### State roots can be omitted
+Block validation only compares state_root and contract_state_root when the incoming field is non-empty (and contract-state validation is additionally conditional on contracts being enabled). Making these mandatory may be correct for a protocol version, but is a consensus-breaking change for existing data and must be introduced with an activation/version plan and replay tests.
+
+### Fork validation uses mutable current state
+Transaction balances are validated against the node's current users table before the candidate branch is fully applied. A candidate fork should instead execute against an isolated state rooted at that fork's parent. This is a major chain-state/reorg refactor; do not assume the current branch fixes cross-fork balance validation.
+
+### EVM gas and RPC compatibility remain incomplete
+Block gas usage is based on intrinsic transaction gas, while contract execution returns actual execution gas. Fee charging, reverted-transaction receipts/status, receipt roots, logs, and eth_estimateGas need a common deterministic accounting model before claiming Ethereum-compatible execution. This branch only changes a few value/checkpoint inconsistencies; it is not an EVM audit.
+
+### Contract rollback needs cross-contract testing
+The snapshot helpers restore direct contract addresses, but nested calls can modify other contracts. Reorg rollback and failure atomicity must be tested with multi-contract call trees, storage writes, logs, balances, successful calls followed by failures, and database transaction errors. Do not assume this area is fully fixed.
+
+### Peer URL / SSRF defense
+Peer URL validation blocks obvious local/private address literals but does not by itself prove that DNS names resolve only to public addresses, nor does lexical IP filtering cover every alternate IP representation. Defend connection-time resolution and redirects, and add tests for IPv4/IPv6, DNS rebinding, mapped addresses, and redirects before exposing peer discovery to hostile input.
+
+## Deployment and compatibility warnings
+
+- Strict capacity validation can reject legacy plot registrations that have zero, stale, non-canonical, or mismatched total_scoops. Existing miners may need to re-register/replot under a documented migration.
+- Changes to PoC proof acceptance, root requirements, block metadata interpretation, issuance checks, and EVM execution semantics can change consensus behavior. Do not roll them out to a live network as a unilateral patch.
+- Before merge or deployment, run dependency-backed tests on the supported Node version, replay a database snapshot, compare chain/state roots across at least two independent nodes, and run multi-node reorg and EVM adversarial suites.
+
+## Recommended order for further work
+
+1. Freeze and document the PoC protocol; build a reference plot/proof verifier with adversarial vectors.
+2. Design fork-specific state execution and atomic reorganization.
+3. Specify deterministic EVM gas, fees, receipts, and reverts.
+4. Enforce mandatory state roots under a version/activation rule.
+5. Add CI, reproducible tests, two-node consensus tests, and migration tooling before opening a production PR.
