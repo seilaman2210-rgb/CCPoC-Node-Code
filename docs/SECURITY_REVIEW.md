@@ -17,13 +17,16 @@ A dependency-backed GitHub Actions run installs the lockfile, runs `node --check
 - Compute cumulative scheduled issuance with BigInt arithmetic, and normalize the default maximum supply to an exact decimal string.
 - Derive selected non-hashed block metadata locally rather than trusting peer-provided values for them.
 - Revert EVM state checkpoints after failed execution, restore per-transaction contract snapshots on recognized reverts, avoid crediting a successful contract call's value twice, and avoid debiting the transferred value for a reverted contract transaction.
+- Implement the experimental v4 plot registration payload and anchor plot roots/capacity through ordinary signed transactions validated in consensus; resolve plot commitments by the requested block ancestry and require immutable plot IDs.
+- Define canonical v4 leaf generation, parent-bound target selection, streaming Merkle generation and a deterministic set of 16 canonical capacity spot checks per winning proof.
+- Add plot generator/proof-builder scripts and an end-to-end test covering generated root, target proof, sample proofs, and miner signature.
 - Add Node's built-in tests for the new pure helpers.
 - Remove the unused `localtunnel` dependency and remediate npm audit findings by updating the lockfile, including `axios` 1.20.0, `proxy-addr` 2.0.8, `qs` 6.16.0, and `solc` 0.8.37.
 - Override `solc`'s pinned `tmp` dependency to patched version 0.2.7; preserve the resolution in the root package manifest so clean installs are reproducible.
 
 ## Validation completed
 
-A GitHub Actions run on this branch successfully installed the locked dependencies, ran `node --check` across the JavaScript files, and ran the actual repository's `npm test` command. The latest completed run reported **31 tests passed and 0 failed**:
+A GitHub Actions run on this branch successfully installed the locked dependencies, ran `node --check` across the JavaScript files, and ran the actual repository's `npm test` command. The latest completed run reported **45 tests passed and 0 failed**:
 - Base-target ratio checks: boundary cases, over-limit ratios in both directions, malformed values.
 - Plot metadata checks: canonical counts, mismatches, invalid sizes, unsafe values, non-canonical encodings.
 - Plot-capacity integration checks against the canonical 1 GiB scoop count.
@@ -32,27 +35,26 @@ A GitHub Actions run on this branch successfully installed the locked dependenci
 - PoC layout checks: 32-byte leaf size, 8,192 entries per nonce, 1 GiB capacity arithmetic, and one eligible slot per complete nonce.
 - Plot commitment immutability checks: idempotent registration, root/size/count replacement rejection, and legacy rootless rows.
 - Sample-index helper checks: determinism, uniqueness, bounds, full permutations, zero samples, invalid input handling, and oversized-sample rejection.
+- PoC v4 checks: canonical transaction payload, chain-parent challenge slot, deterministic generation, capacity-sample selection, streaming Merkle roots/proofs, consensus ancestry and immutable registrations.
+- End-to-end v4 scripts: one-nonce plot creation, proof packet construction, target/sample inclusion paths, and miner signature.
 
-The dependency remediation run additionally executed `npm audit` against the final clean install and reported **0 vulnerabilities** (12 October 2026). It also ran `npm ci`, the full JavaScript syntax pass, and all 31 tests successfully.
+The dependency remediation run additionally executed `npm audit` against the final clean install and reported **0 vulnerabilities** (12 October 2026). It also ran `npm ci`, the full JavaScript syntax pass, and all 45 tests successfully.
 
 This is meaningful unit/syntax validation, but it is **not** an integration test of a running node, multi-node consensus test, replay of a real database, or formal cryptographic audit.
 
-## Critical unresolved protocol issue: current PoC does not prove physical storage capacity
+## PoC v4 status: consensus anchors and canonical data are implemented experimentally, but storage hardness is not proven
 
-The current PoC layout declares 8,192 32-byte leaves per nonce, but the previous sampling modulus was 4,096. That made two leaf positions per nonce eligible for a challenge. This branch aligns `MINING_SCOOP_MODULUS` with `SCOOPS_PER_NONCE` (8,192), so one fixed leaf slot is eligible in each complete nonce and miners still search that slot across all nonces. This is the core pattern used by Burst/Signum: a challenge selects a scoop slot, and candidates across nonces are evaluated. The modulo-class rule itself is therefore not the fundamental flaw; the layout and sampling parameters must agree.
+This branch now implements the v4 pieces described in [POC_PROTOCOL_V4.md](POC_PROTOCOL_V4.md):
 
-This adjustment is a **consensus change**, not a drop-in production patch. It is not Burst byte-compatible: CCPoC currently treats each leaf as 32 bytes, whereas Signum/Burst scoops are 64 bytes (two 32-byte hashes) within 4,096 scoops per nonce. The new setting makes the CCPoC internal layout consistent with its own 8,192-leaf nonce, but all miners and validating nodes must activate the same version at a coordinated height.
+- A canonical 78-byte registration payload is carried in a normal signed transaction and persisted as a block event.
+- Plot commitments are immutable by plot ID on each branch's ancestry. Local registration rows and peer caches are not trusted as consensus state.
+- Winner proofs require a mature commitment on the parent ancestry, the correct owner/root/capacity/format, a parent-bound target slot, a leaf recomputed using the canonical generator, and a valid Merkle path.
+- The winner proof also includes 16 deterministic random spot checks; each leaf is recomputed and its path checked against the root.
+- Consensus difficulty/capacity accounting reads only mature on-chain plot commitments, rather than locally announced plot sizes.
 
-More fundamentally, a Merkle root commits to data but does not prove that the prover physically stores a plot of the claimed size. A prover can choose arbitrary leaf contents, build a root, and announce the advertised leaf count; the verifier currently validates inclusion without recomputing each leaf from a canonical plot-generation algorithm. Registration is still local database/API state rather than a required consensus-anchored plot-commitment transaction, so a block received by a node that does not know the registration can be validated using the proof packet alone. This branch reduces local root rotation by making the registration endpoint and peer caches reject conflicting updates for an existing plot ID, but first-seen cache state is not a globally agreed, challenge-time commitment. These are the unresolved fake-capacity risks.
+This closes the earlier **local-only registration / arbitrary-leaf** validation gap within this experimental format. It does not establish that the miner physically stores every committed byte. The canonical leaves are built from a sequential SHA-256 chain; an attacker may recompute these data instead of storing them. Sixteen spot checks raise the cost of sparse-root attacks but are a probabilistic defense, not a formal Proof-of-Space security proof. Parent-hash grinding and time-memory tradeoffs still require adversarial analysis.
 
-To establish meaningful storage-hardness, a protocol upgrade must:
-1. Specify a canonical plot-generation algorithm, leaf/scoop format, nonce layout, and commitment format.
-2. Anchor each immutable plot commitment in consensus-validated state before it can be challenged; reject post-challenge registrations or root replacement deterministically on every node.
-3. Keep the Burst-style search across all nonces, but define exact target derivation, leaf serialization, proof encoding, and deadline calculation.
-4. Select a construction whose plotting/reconstruction cost makes time-memory trade-offs uneconomical. Chia's seven-table proof-of-space construction is one reference point; simply hashing `plot_id || index` would be too cheap to regenerate.
-5. Add independent reference vectors and adversarial tests for fake plots, grinding, replay, duplicate leaves, invalid commitments, registration timing, and nodes with different local databases.
-
-The miner/plot-generation implementation is not present in this repository, so end-to-end interoperability cannot be checked here. The modulus alignment removes the two-candidates-per-nonce mismatch, but it does **not establish a sound Proof-of-Capacity protocol** or solve physical-storage proofs.
+V4 is a consensus-breaking change and is not Burst/Signum-compatible. This branch enforces it immediately; an activation-height migration has **not** been implemented. Do not merge or deploy it on an existing network without defining an activation height, upgrading miner/plot-generator code, replaying the historical chain and checking independent nodes/forks. For stronger storage hardness, compare a purpose-built construction such as Burst/Signum's Shabal POC2 plotting or Chia's multi-table Proof of Space; neither can be substituted without new format, proof and consensus work.
 
 ## Other important unresolved issues
 
