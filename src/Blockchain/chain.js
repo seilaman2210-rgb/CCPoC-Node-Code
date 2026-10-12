@@ -447,7 +447,7 @@ class Chain {
           ? safeInt(challenge.target_scoop_index, -1)
           : parseInt(sha256hex(String(challenge.challenge_seed || '')).slice(0, 8), 16) % MINING_SCOOP_MODULUS;
         if (scoopIndex % MINING_SCOOP_MODULUS !== expectedTargetIdx) {
-          return { ok: false, motivo: `winner_proof scoop_index ${scoopIndex} is not the challenge target scoop (expected mod ${MINING_SCOOP_MODULUS} == ${expectedTargetIdx})` };
+          return { ok: false, motivo: `winner_proof scoop_index ${scoopIndex} is not the selected leaf slot (expected index % ${MINING_SCOOP_MODULUS} == ${expectedTargetIdx})` };
         }
         const leafHash = Buffer.from(scoopData, 'hex');
         if (!verifyMerkleProofBuf(leafHash, scoopIndex, totalScoops, merkleProof, merkleRootClaim)) {
