@@ -23,3 +23,7 @@ test('rejects invalid sizes, fractional counts, and unsafe integers', () => {
   assert.equal(validatePlotMetadata(1, '1.5', 1).ok, false);
   assert.equal(validatePlotMetadata(1, '9007199254740992', 1).ok, false);
 });
+
+test('rejects non-canonical integer strings', () => {
+  assert.equal(validatePlotMetadata(1, '0010', 10).ok, false);
+});
