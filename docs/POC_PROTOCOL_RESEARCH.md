@@ -22,7 +22,7 @@ In the current node:
 - plot registration is performed through an API and saved in local SQLite state, rather than requiring a plot commitment transaction validated as part of canonical chain state;
 - the leaf is not recomputed from a canonical plot identifier and nonce;
 - a verifier can accept a winner proof when it has no local copy of that plot commitment;
-- the registration API uses replacement semantics for an existing `(plot_id, miner)` row.
+- this review branch now rejects attempts to replace the root or capacity for an existing `(plot_id, miner)` registration and treats peer announcements as immutable per plot ID. This is local hardening, not a global consensus anchor.
 
 A commitment can therefore describe an arbitrary set of leaf values. The capacity metadata checks prevent inconsistent size/count claims, but those checks do not prove physical storage.
 
@@ -41,4 +41,9 @@ Chia references:
 
 ## Scope of this branch
 
-This branch implements the narrow sampling-parameter alignment and tests the layout arithmetic. It does **not** claim that CCPoC is now a secure Proof-of-Capacity construction. A full fix needs a plot-generation implementation and miner software that are not present in this repository, plus consensus-anchored plot registration and a coordinated protocol activation.
+This branch implements the narrow sampling-parameter alignment, makes local plot registrations/caches reject root rotation, fixes a biased exported sample-index helper, and tests those properties. It does **not** claim that CCPoC is now a secure Proof-of-Capacity construction. A full fix needs a plot-generation implementation and miner software that are not present in this repository, plus consensus-anchored plot registration and a coordinated protocol activation.
+
+
+## Additional helper issue found during review
+
+The exported \`deriveSampleIndexes\` utility previously fed a hexadecimal SHA-256 substring to \`parseInt(..., 10)\` through \`safeInt\`. Hex letters therefore caused many values to parse as zero, while modulo reduction introduced additional sampling bias. Invalid counts could also lead to empty/invalid behavior or excessive allocation. The branch now uses BigInt parsing of the full digest, rejection sampling, Floyd's unique-subset selection, deterministic bounds checks, and a one-million-output ceiling. Code search found the helper exported but no active consensus caller in this repository; this fix hardens the exposed utility but should not be confused with the protocol's currently used scoop selection.
