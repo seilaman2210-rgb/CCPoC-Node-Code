@@ -41,7 +41,7 @@ function readExactSync(fd, buffer, position) {
 
 function buildMerkleIndex(plotPath, treePath, totalLeaves) {
   const plotFd = fs.openSync(plotPath, 'r');
-  const treeFd = fs.openSync(treePath, 'wx');
+  const treeFd = fs.openSync(treePath, 'wx+');
   const levels = [];
   let sourceFd = plotFd;
   let sourceOffset = 0;
