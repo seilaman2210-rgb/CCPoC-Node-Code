@@ -6,7 +6,7 @@ on:
       - review/deeper-consensus-hardening
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   preview:
@@ -26,7 +26,10 @@ jobs:
       - name: Apply compatible npm security updates
         shell: bash
         run: |
-          npm audit fix || true
+          npm audit fix
+          npm pkg set 'overrides.solc.tmp=0.2.7'
+          npm install --package-lock-only --ignore-scripts
+          npm ci
           npm audit --json > npm-audit-after.json || true
           node -e "
             const pkg = require('./package.json');
@@ -37,9 +40,14 @@ jobs:
               const item = lock.packages['node_modules/' + name];
               console.log(JSON.stringify({ name, rootDependency: pkg.dependencies?.[name] || null, lockedVersion: item?.version || null }));
             }
-            console.log('Audit after remediation preview:', JSON.stringify(audit.metadata?.vulnerabilities || {}));
+            const totals = audit.metadata?.vulnerabilities || {};
+            console.log('Audit after remediation:', JSON.stringify(totals));
             for (const [name, item] of Object.entries(audit.vulnerabilities || {})) {
               console.log(JSON.stringify({ package: name, severity: item.severity, range: item.range, fixAvailable: item.fixAvailable }));
+            }
+            if ((totals.high || 0) > 0 || (totals.critical || 0) > 0) {
+              console.error('High/critical npm audit findings remain; refusing to commit dependency changes.');
+              process.exit(1);
             }
           "
       - name: Check JavaScript syntax
@@ -50,7 +58,20 @@ jobs:
           done < <(find . -path './node_modules' -prune -o -name '*.js' -type f -print0)
       - name: Run unit tests
         run: npm test
+      - name: Commit remediated dependency manifests
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          if git diff --cached --quiet; then
+            echo "No dependency manifest changes to commit."
+          else
+            git commit -m "chore: remediate npm audit findings [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
       - name: Upload patched manifests for review
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dependency-remediation-preview
@@ -58,4 +79,4 @@ jobs:
             package.json
             package-lock.json
             npm-audit-after.json
-          if-no-files-found: error
+          if-no-files-found: warn
