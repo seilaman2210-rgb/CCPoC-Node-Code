@@ -322,8 +322,15 @@ async function runWithStorage(vm, contractAddress, params, persist = false) {
       }
     }
     if (canCheckpoint) {
-      if (persist && typeof stateManager.commit === 'function') await stateManager.commit();
-      else await stateManager.revert();
+      // A reverted EVM call must discard its in-memory state changes even when
+      // the caller requested persistence. Persisted DB writes above only occur
+      // on successful execution, so committing here would leave VM cache state
+      // inconsistent with the database.
+      if (persist && !execResult.exceptionError && typeof stateManager.commit === 'function') {
+        await stateManager.commit();
+      } else {
+        await stateManager.revert();
+      }
     }
     return normalized;
   } catch (err) {
