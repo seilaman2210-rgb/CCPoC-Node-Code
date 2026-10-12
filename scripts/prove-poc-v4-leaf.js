@@ -153,6 +153,7 @@ function main() {
     throw new Error('failed to construct all canonical capacity samples');
   }
 
+  const leafHex = leaf.toString('hex');
   const deadline = computeDeadline(leafHex, challengeSeed, baseTarget);
   const privateKey = String(process.env.CCPOC_PRIVATE_KEY || '').replace(/^0x/i, '');
   if (!/^[0-9a-fA-F]{64}$/.test(privateKey)) {
