@@ -33,7 +33,7 @@ jobs:
           // solc@0.8.37 pins tmp@0.2.6, which is vulnerable. npm overrides
           // forces this transitive dependency onto the patched tmp@0.2.7.
           pkg.overrides = { ...(pkg.overrides || {}), tmp: '0.2.7' };
-          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\\n');
+fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
           console.log('Applying npm overrides:', JSON.stringify(pkg.overrides));
           NODE
           npm install --package-lock-only --ignore-scripts
