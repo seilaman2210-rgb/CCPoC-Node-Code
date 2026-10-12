@@ -557,11 +557,11 @@ class Chain {
             const cur = this.db.prepare('SELECT balance, nonce FROM users WHERE address = ?').get(tx.from_addr);
             if (cur) {
               const curBalance = safeBigInt(cur.balance, 0n);
-              // EVM-reverted contract transactions keep their nonce and pay the
-            // fee, but the transferred value must be reverted with execution.
-            const revertedContractTx = this._isContractOp(tx) && tx._ccApplied === false;
-            const valueDebit = revertedContractTx ? 0n : safeBigInt(tx.value, 0n);
-            const newBalance = curBalance - valueDebit - safeBigInt(tx.fee, 0n);
+              // EVM-reverted contract transactions keep their nonce and pay
+              // the fee, but the transferred value must be reverted.
+              const revertedContractTx = this._isContractOp(tx) && tx._ccApplied === false;
+              const valueDebit = revertedContractTx ? 0n : safeBigInt(tx.value, 0n);
+              const newBalance = curBalance - valueDebit - safeBigInt(tx.fee, 0n);
               this.db.prepare('UPDATE users SET balance = ?, nonce = ?, updated_at = ? WHERE address = ?').run(String(newBalance), Math.max(safeInt(cur.nonce, 0) + 1, safeInt(tx.nonce, 0) + 1), now, tx.from_addr);
             }
           }
