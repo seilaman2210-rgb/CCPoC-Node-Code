@@ -58,7 +58,7 @@ test('malformed or non-canonical plot commitment transactions are rejected', () 
   assert.equal(parsePlotCommitmentTxData(valid.slice(0, -2)).ok, false);
 
   const badSize = Buffer.from(valid.slice(2), 'hex');
-  badSize.writeBigUInt64BE(512n * 1024n * 1024n, 70);
+  badSize.writeBigUInt64BE(536870913n, 70);
   assert.equal(parsePlotCommitmentTxData('0x' + badSize.toString('hex')).ok, false);
 
   const badVersion = Buffer.from(valid.slice(2), 'hex');
