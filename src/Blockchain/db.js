@@ -81,7 +81,8 @@ function initDB(dbPath, cfg) {
     CREATE TABLE IF NOT EXISTS challenge_submissions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       challenge_id TEXT, miner TEXT, plot_id TEXT, size_gb REAL,
-      deadline INTEGER, proof_digest TEXT, submitted_at INTEGER
+      deadline INTEGER, proof_digest TEXT, submitted_at INTEGER,
+      public_key TEXT DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_sub_challenge ON challenge_submissions(challenge_id);
     CREATE UNIQUE INDEX IF NOT EXISTS ux_sub_challenge_plot ON challenge_submissions(challenge_id, miner, plot_id, deadline);
